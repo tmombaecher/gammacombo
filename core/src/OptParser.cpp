@@ -126,6 +126,7 @@ void OptParser::defineOptions()
 	availableOptions.push_back("asimovfile");
   availableOptions.push_back("batchstartn");
   availableOptions.push_back("batcheos");
+	availableOptions.push_back("CL");
 	availableOptions.push_back("cls");
 	availableOptions.push_back("combid");
 	availableOptions.push_back("color");
@@ -444,6 +445,8 @@ void OptParser::parseArguments(int argc, char* argv[])
 	TCLAP::ValueArg<string> jobdirArg("", "jobdir", "Give absolute job-directory if working on batch systems.", false, "default", "string");
   TCLAP::ValueArg<string> toyFilesArg("", "toyFiles", "Pass some different toy files, for example if you want 1D projection of 2D FC.", false, "default", "string" );
   TCLAP::ValueArg<string> saveArg("","save", "Save the workspace this file name", false, "", "string");
+  TCLAP::ValueArg<double> CLArg("","CL", "Define your own confidence level in percent, e.g. --CL 90", false, -1., "float");
+
 
 	// --------------- switch arguments
   TCLAP::SwitchArg batcheosArg("","batcheos", "When submitting batch jobs (for plugin) write the output to eos", false);
@@ -748,6 +751,7 @@ void OptParser::parseArguments(int argc, char* argv[])
 	if ( isIn<TString>(bookedOptions, "combid" ) ) cmd.add(combidArg);
 	if ( isIn<TString>(bookedOptions, "color" ) ) cmd.add(colorArg);
 	if ( isIn<TString>(bookedOptions, "cls" ) ) cmd.add(clsArg);
+	if ( isIn<TString>(bookedOptions, "CL" ) ) cmd.add(CLArg);
   if ( isIn<TString>(bookedOptions, "batchstartn" ) ) cmd.add( batchstartnArg );
   if ( isIn<TString>(bookedOptions, "batcheos" ) ) cmd.add(batcheosArg);
 	if ( isIn<TString>(bookedOptions, "asimovfile" ) ) cmd.add( asimovFileArg );
@@ -759,6 +763,7 @@ void OptParser::parseArguments(int argc, char* argv[])
 	// copy over parsed values into data members
 	//
 	asimov            = asimovArg.getValue();
+	CL 			  	  = CLArg.getValue();
 	cls 			  = clsArg.getValue();
 	color             = colorArg.getValue();
 	controlplot       = controlplotArg.getValue();
@@ -1212,6 +1217,12 @@ void OptParser::parseArguments(int argc, char* argv[])
 	// check --po argument
 	if ( plotpluginonly && !isAction("plugin") ){
 		cout << "ERROR : --po can only be given when -a plugin is set." << endl;
+		exit(1);
+	}
+
+	// check --CL argument
+	if( CLArg.isSet() && CL<0 || CL>100){
+		std::cout << "ERROR: --CL can only be assigned values between 0 and 100." << std::endl;
 		exit(1);
 	}
 }

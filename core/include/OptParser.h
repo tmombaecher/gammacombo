@@ -40,6 +40,7 @@ class OptParser
 		vector<int>		asimov;
 		vector<TString> asimovfile;
 		bool			cacheStartingValues;
+		double 			CL;
 		vector<int>		cls;
 		vector<int>		color;
 		vector<int>		combid;

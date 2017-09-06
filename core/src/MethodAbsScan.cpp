@@ -81,6 +81,7 @@
 	{
 		if ( opt->var.size()>1 ) scanVar2 = opt->var[1];
 		//todo initialise user specific CL from command line
+		if (opt->CL > 0) CLuser = opt->CL/100.;
 	}
 
 MethodAbsScan::~MethodAbsScan()
@@ -856,7 +857,7 @@ void MethodAbsScan::printCLintervals(int CLsType)
 	clp.addIntervals(clintervals1sigma);
 	clp.addIntervals(clintervals2sigma);
 	clp.addIntervals(clintervals3sigma);
-	clp.addIntervals(clintervalsuser);
+	if(arg->CL>0) clp.addIntervals(clintervalsuser);
 	clp.print();
 	clp.savePython();
 	cout << endl;

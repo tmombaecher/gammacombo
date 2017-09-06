@@ -676,8 +676,14 @@ void OneMinusClPlot::drawCLguideLine(float pvalue)
 
 	float labelPos = xmin+(xmax-xmin)*0.10;
 	if ( arg->isQuickhack(2) ) labelPos = xmin+(xmax-xmin)*0.55;
-  if ( arg->isQuickhack(23) ) labelPos = xmin+(xmax-xmin)*0.8;
-  if ( arg->isQuickhack(31) ) labelPos = xmin+(xmax-xmin)*0.01;
+  	if ( arg->isQuickhack(23) ) labelPos = xmin+(xmax-xmin)*0.8;
+  	if ( arg->isQuickhack(31) ) labelPos = xmin+(xmax-xmin)*0.01;
+  	//check for conflicts with default guidelines
+	if((abs(pvalue-4.55e-2)>1e-4 && abs(pvalue-4.55e-2)<0.08) || (abs(pvalue-0.3173)>1e-4 && abs(pvalue-0.3173)<0.08)){
+		if(!arg->isQuickhack(23))labelPos+=(xmax-xmin)*0.15;
+		else labelPos-=(xmax-xmin)*0.15;
+	}
+
 	float labelPosYmin = 0;
 	float labelPosYmax = 0;
 
@@ -703,6 +709,7 @@ void OneMinusClPlot::drawCLguideLine(float pvalue)
 	l->SetLineWidth(1);
 	l->SetLineColor(kBlack);
 	l->SetLineStyle(kDotted);
+	if(!(abs(pvalue-0.3173)<1e-4 || abs(pvalue-4.55e-2)<1e-4 || abs(pvalue-6.3e-5)<1e-4)) l->SetLineStyle(kDashed);
 	l->Draw();
 }
 
@@ -716,9 +723,13 @@ void OneMinusClPlot::drawCLguideLines()
 	if ( arg->plotlog ){
 		drawCLguideLine(2.7e-3);
 		if ( arg->plotymin < 6.3e-5 ) {
-      drawCLguideLine(6.3e-5);
-    }
+      		drawCLguideLine(6.3e-5);
+    	}
 	}
+	if (arg->CL>0){
+		drawCLguideLine(1.-arg->CL/100.);
+	}
+
 }
 
 
