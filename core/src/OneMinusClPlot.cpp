@@ -709,7 +709,6 @@ void OneMinusClPlot::drawCLguideLine(float pvalue)
 	l->SetLineWidth(1);
 	l->SetLineColor(kBlack);
 	l->SetLineStyle(kDotted);
-	if(!(abs(pvalue-0.3173)<1e-4 || abs(pvalue-4.55e-2)<1e-4 || abs(pvalue-6.3e-5)<1e-4)) l->SetLineStyle(kDashed);
 	l->Draw();
 }
 
