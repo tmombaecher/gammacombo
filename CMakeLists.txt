@@ -25,6 +25,13 @@ INCLUDE(settings)
 INCLUDE(macros)
 INCLUDE(combiners)
 
+# use ccache if available
+find_program(CCACHE_FOUND ccache)
+if(CCACHE_FOUND)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
+    set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK ccache)
+endif(CCACHE_FOUND)
+
 # find ROOT
 FIND_PACKAGE(ROOT REQUIRED)
 # defines:
@@ -98,16 +105,26 @@ SET(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS} -O3 -g3")
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag(-std=c++11 HAS_CPP11)
 check_cxx_compiler_flag(-std=c++0x HAS_CPP11_ALTERNATIVE)
-if (HAS_CPP11)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-elseif (HAS_CPP11_ALTERNATIVE)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+check_cxx_compiler_flag(-std=c++14 HAS_CPP14)
+check_cxx_compiler_flag(-std=c++1y HAS_CPP14_ALTERNATIVE)
+
+if (HAS_CPP14)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
+elseif (HAS_CPP14_ALTERNATIVE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++1y")
 else()
-  message("No C++11 support.  Moving on.")
+	message(WARNING "No C++14 support.")
+	if (HAS_CPP11)
+  		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
+	elseif (HAS_CPP11_ALTERNATIVE)
+  		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++0x")
+	else()
+  		message(FATAL_ERROR "No C++11 support.")
+  	endif()
 endif()
 
 # set additional compiler flags
-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c++11-extensions"   )
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c++11-extensions -Wno-inconsistent-missing-override"   )
 
 ######################################
 #
