@@ -1002,12 +1002,6 @@ void GammaComboEngine::defineColors()
     if ( i>= arg->fillcolor.size() ) fillColors.push_back( colorsLine[i] );
     else fillColors.push_back( arg->fillcolor[i] );
   }
-  // sort out the fill transparency vector
-  for ( int i=0; i<arg->combid.size(); i++ ) {
-    if ( i>= arg->filltransparency.size() ) fillTransparencies.push_back( 0. );
-    else fillTransparencies.push_back( arg->filltransparency[i] );
-  }
-
   // sort out the line width vector
   for ( int i=0; i<arg->combid.size(); i++ ) {
     if ( i>= arg->linewidth.size() ) lineWidths.push_back( 2 );
@@ -1269,12 +1263,11 @@ void GammaComboEngine::make1dProbPlot(MethodProbScan *scanner, int cId)
 		if ( arg->color.size()>cId ) colorId = arg->color[cId];
 		//scanner->setLineColor(colorsLine[colorId]);
 		scanner->setTextColor(colorsText[colorId]);
-    scanner->setLineColor(lineColors[cId]);
-    scanner->setLineStyle(lineStyles[cId]);
-    scanner->setLineWidth(lineWidths[cId]);
-    scanner->setFillColor(fillColors[cId]);
-    scanner->setFillStyle(fillStyles[cId]);
-    scanner->setFillTransparency(fillTransparencies[cId]);
+    	scanner->setLineColor(lineColors[cId]);
+    	scanner->setLineStyle(lineStyles[cId]);
+    	scanner->setLineWidth(lineWidths[cId]);
+    	scanner->setFillColor(fillColors[cId]);
+    	scanner->setFillStyle(fillStyles[cId]);
 		plot->Draw();
 	}
 }
@@ -1370,7 +1363,6 @@ void GammaComboEngine::make2dPluginPlot(MethodPluginScan *sPlugin, MethodProbSca
   sProb->setLineWidth(lineWidths[cId]);
   sProb->setFillColor(fillColors[cId]);
   sProb->setFillStyle(fillStyles[cId]);
-  sProb->setFillTransparency(fillTransparencies[cId]);
 	sPlugin->setDrawSolution(arg->plotsolutions[cId]);
 	if ( arg->isQuickhack(17) ) {
 		sPlugin->plotOn(plot);
@@ -1401,7 +1393,6 @@ void GammaComboEngine::make1dPluginOnlyPlot(MethodPluginScan *sPlugin, int cId)
   sPlugin->setLineWidth(lineWidths[cId]);
   sPlugin->setFillColor(fillColors[cId]);
   sPlugin->setFillStyle(fillStyles[cId]);
-  sPlugin->setFillTransparency(fillTransparencies[cId]);
 	sPlugin->setDrawSolution(arg->plotsolutions[cId]);
   for (int i=0; i<arg->cls.size(); i++) sPlugin->plotOn(plot, arg->cls[i]);
 	sPlugin->plotOn(plot);
@@ -1481,13 +1472,7 @@ void GammaComboEngine::make2dProbPlot(MethodProbScan *scanner, int cId)
   }
 	// contour plot
 	scanner->setDrawSolution(arg->plotsolutions[cId]);
-  //scanner->setLineColor(colorsLine[cId]);
-  scanner->setLineColor(lineColors[cId]);
-  scanner->setLineStyle(lineStyles[cId]);
-  scanner->setLineWidth(lineWidths[cId]);
-  scanner->setFillColor(fillColors[cId]);
-  scanner->setFillStyle(fillStyles[cId]);
-  scanner->setFillTransparency(fillTransparencies[cId]);
+	scanner->setLineColor(colorsLine[cId]);
 	if(arg->cls.size()>0) scanner->plotOn(plot, 1);
 	scanner->plotOn(plot, 0);
 	// only draw the plot once when multiple scanners are plotted,
@@ -1691,13 +1676,8 @@ void GammaComboEngine::setObservablesFromFile(Combiner *c, int cId)
 ///
 void GammaComboEngine::writebatchscripts()
 {
-	if (runOnDataSet){
-		m_batchscriptwriter->writeScripts_datasets(arg, getPdf(0));
-	}
-	else{
-		m_batchscriptwriter->writeScripts(arg, &cmb);
-	}
-  	exit(0);
+  m_batchscriptwriter->writeScripts(arg, &cmb);
+  exit(0);
 }
 
 ///

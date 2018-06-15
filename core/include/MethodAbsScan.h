@@ -80,7 +80,6 @@ class MethodAbsScan
     inline int                      getLineWidth(){return lineWidth;};
 		inline int                      getFillStyle(){return fillStyle;};
 		inline int                      getFillColor(){return fillColor;};
-    inline float                    getFillTransparency(){return fillTransparency;};
 		inline TString                  getMethodName() const {return methodName;};
 		inline TString                  getName() const {return name;};
 		inline int                      getNObservables(){return w->set(obsName)->getSize();}
@@ -132,7 +131,6 @@ class MethodAbsScan
 		inline void                     setTextColor(int c){textColor = c;};
 		inline void                     setFillStyle(int c){fillStyle = c;};
 		inline void                     setFillColor(int c){fillColor = c;};
-    inline void                     setFillTransparency(float c){fillTransparency = c;};
 		inline void                     setTitle(TString s){title = s;};
 		void                            setChi2minGlobal(double x);
 		void                            setSolutions(vector<RooSlimFitResult*> s);
@@ -207,7 +205,6 @@ class MethodAbsScan
 		int lineWidth;
     int fillStyle;
     int fillColor;
-    float fillTransparency;
 		bool drawFilled;            ///< choose if Histogram is drawn filled or not
 		int drawSolution;           ///< Configure how to draw solutions on the plots.
 		///< 0=don't plot, 1=plot at central value (1d) or markers (2d)
