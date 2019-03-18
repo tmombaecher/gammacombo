@@ -719,13 +719,18 @@ void MethodAbsScan::calcCLintervals(int CLsType)
 			float y = 1.- ConfidenceLevels[c];
 			float sol = getScanVar1Solution(iSol);
 			int sBin = histogramCL->FindBin(sol);
+			std::cout << "solution bin: " << sBin << std::endl;
+			if(histogramCL->IsBinOverflow(sBin)||histogramCL->IsBinUnderflow(sBin)){
+				std::cout << "MethodAbsScan::calcCLintervals(): WARNING: no solution in scanrange found, will use lowest bin!" << std::endl;
+				sBin=1;
+			}
 
 			// find lower interval bound
 			for ( int i=sBin; i>0; i-- ){
 				if ( histogramCL->GetBinContent(i) < y ){
 					if ( n>25 ){
 						bool check = interpolate(histogramCL, i, y, sol, false, CLlo[c], CLloErr[c]);
-            if(!check && (arg->verbose ||arg->debug)) cout << "Using linear interpolation." << endl;
+            if(!check && (arg->verbose ||arg->debug)) cout << "MethodAbsScan::calcCLintervals(): Using linear interpolation." << endl;
 						if ( !check || CLlo[c]!=CLlo[c] ) interpolateSimple(histogramCL, i, y, CLlo[c]);
 					}
 					else{
@@ -740,7 +745,7 @@ void MethodAbsScan::calcCLintervals(int CLsType)
 				if ( histogramCL->GetBinContent(i) < y ){
 					if ( n>25 ){
 						bool check = interpolate(histogramCL, i-1, y, sol, true, CLhi[c], CLhiErr[c]);
-						if(!check && (arg->verbose ||arg->debug)) cout << "Using linear interpolation." << endl;
+						if(!check && (arg->verbose ||arg->debug)) cout << "MethodAbsScan::calcCLintervals(): Using linear interpolation." << endl;
 						if (!check || CLhi[c]!=CLhi[c] ) interpolateSimple(histogramCL, i-1, y, CLhi[c]);
 					}
 					else{

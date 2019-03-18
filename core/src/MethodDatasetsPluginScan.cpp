@@ -405,7 +405,8 @@ void MethodDatasetsPluginScan::readScan1dTrees(int runMin, int runMax, TString f
         // criteria for GammaCombo
         bool convergedFits      = (t.statusFree == 0. && t.statusScan == 0.) && (t.covQualFree == 3 && t.covQualScan == 3);
         bool tooHighLikelihood  = !( abs(t.chi2minToy) < 1e27 && abs(t.chi2minGlobalToy) < 1e27);
-        bool BadBkgFit          = !(t.statusFreeBkg == 0 && t.statusBkgBkg == 0) && (t.covQualFreeBkg == 3 && t.covQualBkgBkg == 3);
+        // bool BadBkgFit          = (!(t.statusFreeBkg == 0 && t.statusBkgBkg == 0) && (t.covQualFreeBkg == 3 && t.covQualBkgBkg == 3))||(t.chi2minBkgBkgToy - t.chi2minGlobalBkgToy<0);
+        bool BadBkgFit          = (!(t.statusFreeBkg == 0 && t.statusBkgBkg == 0) && (t.covQualFreeBkg == 3 && t.covQualBkgBkg == 3))||std::isnan(t.chi2minBkgBkgToy - t.chi2minGlobalBkgToy);
         // bool BadBkgFit          = false;
 
         // apply cuts
@@ -477,9 +478,10 @@ void MethodDatasetsPluginScan::readScan1dTrees(int runMin, int runMax, TString f
         // chi2minBkgBkgToy is the best fit of the bkg pdf of bkg-only toy, chi2minGlobalBkgToy is the best global fit of the bkg-only toy
         double bkgTestStatVal = t.chi2minBkgBkgToy - t.chi2minGlobalBkgToy;
         
-        if( !BadBkgFit ){
+        if( !BadBkgFit && bkgTestStatVal>=0){
             // bkgTestStatVal = t.scanbestBkgfitBkg <= 0. ? bkgTestStatVal : 0.;  // if muhat < mu then q_mu = 0
             if(hBin==1){
+                if(bkgTestStatVal<0) std::cout << "NEG BKG TEST STATISTIC!" << std::endl;
                 bkg_pvals->Fill(TMath::Prob(bkgTestStatVal,1));
             }
             // bkgTestStatVal = t.scanbestBkgfitBkg <= t.scanpoint ? bkgTestStatVal : 0.;  // if muhat < mu then q_mu = 0
