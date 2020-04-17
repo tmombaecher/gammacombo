@@ -1,6 +1,11 @@
 #include "GammaComboEngine.h"
+#include "MethodDatasetsPluginScan.h"
+#include "MethodDatasetsProbScan.h"
+#include "PDF_Datasets.h"
+#include "TLatex.h"
 
-GammaComboEngine::GammaComboEngine(TString name, int argc, char* argv[])
+GammaComboEngine::GammaComboEngine(TString name, int argc, char* argv[]):
+  runOnDataSet(false)
 {
 	// time the program
 	t.Start();
@@ -18,8 +23,8 @@ GammaComboEngine::GammaComboEngine(TString name, int argc, char* argv[])
 	if (arg->filenameaddition!="") name += "_"+arg->filenameaddition;
 	m_fnamebuilder = new FileNameBuilder(arg, name);
 
-  // make batch scripts if appropriate and exit
-  m_batchscriptwriter = new BatchScriptWriter(argc, argv);
+	// make batch scripts if appropriate and exit
+	m_batchscriptwriter = new BatchScriptWriter(argc, argv);
 
 	// run ROOT in interactive mode, if requested (-i)
 	if ( arg->interactive ) theApp = new TApplication("App", &argc, argv);
@@ -27,6 +32,17 @@ GammaComboEngine::GammaComboEngine(TString name, int argc, char* argv[])
 
 	// initialize members
 	plot = 0;
+
+  // reconfigure RooFormulaVar output
+  RooMsgService::instance().getStream(1).removeTopic(InputArguments);
+  RooMsgService::instance().getStream(0).addTopic(InputArguments);
+
+}
+
+GammaComboEngine::GammaComboEngine(TString name, int argc, char* argv[], bool _runOnDataSet)
+{
+  GammaComboEngine(name,argc,argv);
+  runOnDataSet = _runOnDataSet;
 }
 
 GammaComboEngine::~GammaComboEngine()
@@ -59,17 +75,44 @@ bool GammaComboEngine::combinerExists(int id) const
 }
 
 ///
+/// Set the PDF (for datasets method) for the GammaComboEngine
+///
+void GammaComboEngine::setPdf( PDF_Abs* pdf )
+{
+  if ( !runOnDataSet ) {
+    cout << "It looks like you're trying to set a pdf but you haven't set runOnDataSet=true. I assume this is what you want so I'm doing it for you" << endl;
+    runOnDataSet = true;
+  }
+  if ( ! dynamic_cast<PDF_Datasets*>(pdf) ) {
+    cout << "GammaComboEngine::setPdf() : ERROR : The pdf you are trying to set " << pdf->getName() << " cannot be cast to a PDF_Datasets object" << endl;
+    exit(1);
+  }
+	if ( pdf==0 ){
+		cout << "GammaComboEngine::setPdf() : ERROR : Trying to add zero pointer as the PDF. Exit." << endl;
+		exit(1);
+	}
+	if ( pdfExists(0) ){
+		cout << "GammaComboEngine::setPdf() : ERROR : You have already set the pdf in GammaComboEngine. Exit." << endl;
+		exit(1);
+	}
+  addPdf(0, pdf);
+}
+
+///
 /// Add a PDF to the GammaComboEngine object.
 ///
 void GammaComboEngine::addPdf(int id, PDF_Abs* pdf, TString title)
 {
+  if (arg->debug) {
+    cout << "GammaComboEngine::addPdf() : INFO  : Adding pdf " << id << " = " << title << endl;
+  }
 	if ( pdf==0 ){
 		cout << "GammaComboEngine::addPdf() : ERROR : Trying to add zero pointer as the PDF. Exit." << endl;
 		exit(1);
 	}
 	// check if requested id exists already
 	if ( pdfExists(id) ){
-		cout << "GammaComboEngine::addPdf() : ERROR : Requested PDF id exists already in GammaComboEngine. Exit." << endl;
+		cout << "GammaComboEngine::addPdf() : ERROR : Requested PDF id " << id << " exists already in GammaComboEngine. Exit." << endl;
 		exit(1);
 	}
 	// check if storage is large enough, enlarge if necessary
@@ -82,11 +125,177 @@ void GammaComboEngine::addPdf(int id, PDF_Abs* pdf, TString title)
 }
 
 ///
+/// Add a pdf with a subset of the observables to the GammaComboEngine
+///
+void GammaComboEngine::addSubsetPdf(int id, PDF_Abs* pdf, vector<int>& indices, TString title)
+{
+  if ( indices.size() > pdf->getObservables()->getSize() ) {
+    cout << "GammaComboEngine::addSubsetPdf() : ERROR - the subset size " << indices.size() << " is bigger than the observables size " << pdf->getObservables()->getSize() << endl;
+    exit(1);
+  }
+  for ( int i=0; i<indices.size(); i++ ) {
+    int index = indices[i];
+    if ( index > pdf->getObservables()->getSize()-1 || index<0) {
+      cout << "GammaComboEngine::addSubsetPdf() : ERROR - one of the subset index values " << index << " is larger than the total number of of observables " << pdf->getObservables()->getSize() << " or it's less than zero" << endl;
+      exit(1);
+    }
+  }
+  RooArgList *obsToRemove = new RooArgList();
+  RooArgList *theoryToRemove = new RooArgList();
+
+  // loop over all observables and remove the ones that aren't in indices
+  for ( int i=0; i<pdf->getObservables()->getSize(); i++ ) {
+    if ( std::find( indices.begin(), indices.end(), i) == indices.end() ) {
+      obsToRemove->add( *(pdf->getObservables()->at(i)) );
+      theoryToRemove->add( *(pdf->getTheory()->at(i)) );
+    }
+  }
+  pdf->getObservables()->remove( *obsToRemove );
+  pdf->getTheory()->remove( *theoryToRemove );
+  delete obsToRemove;
+  delete theoryToRemove;
+
+  // now sort out parameters
+  RooArgList *paramsToRemove = new RooArgList();
+  for ( int i=0; i<pdf->getParameters()->getSize(); i++ ) {
+    bool paramFoundInTheory = false;
+    for ( int j=0; j<pdf->getTheory()->getSize(); j++ ) {
+      if ( pdf->getTheory()->at(j)->dependsOn( *(pdf->getParameters()->at(i)) ) ) {
+        paramFoundInTheory = true;
+      }
+    }
+    if (!paramFoundInTheory) paramsToRemove->add( *(pdf->getParameters()->at(i)) );
+  }
+  pdf->getParameters()->remove( *paramsToRemove );
+  delete paramsToRemove;
+
+  // now sort out uncertainties
+  vector<double> oldStatErrs = pdf->StatErr;
+  vector<double> oldSystErrs = pdf->SystErr;
+  pdf->StatErr.clear();
+  pdf->SystErr.clear();
+  for (int i=0; i<indices.size(); i++ ) {
+    int index = indices[i];
+    pdf->StatErr.push_back( oldStatErrs[index] );
+    pdf->SystErr.push_back( oldSystErrs[index] );
+  }
+
+  pdf->setNObs( indices.size() );
+  TMatrixDSym newCorStatMatrix( indices.size() );
+  TMatrixDSym newCorSystMatrix( indices.size() );
+
+  pdf->getSubCorrelationStat( newCorStatMatrix, indices );
+  pdf->getSubCorrelationSyst( newCorSystMatrix, indices );
+
+  pdf->corStatMatrix.ResizeTo( indices.size(), indices.size() );
+  pdf->corSystMatrix.ResizeTo( indices.size(), indices.size() );
+  pdf->corMatrix.ResizeTo( indices.size(), indices.size() );
+  pdf->covMatrix.ResizeTo( indices.size(), indices.size() );
+
+  pdf->corStatMatrix = newCorStatMatrix;
+  pdf->corSystMatrix = newCorSystMatrix;
+
+  pdf->buildCov();
+  pdf->buildPdf();
+
+  addPdf(id, pdf, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, int i3, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  indices.push_back(i3);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  indices.push_back(i3);
+  indices.push_back(i4);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  indices.push_back(i3);
+  indices.push_back(i4);
+  indices.push_back(i5);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, int i6, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  indices.push_back(i3);
+  indices.push_back(i4);
+  indices.push_back(i5);
+  indices.push_back(i6);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, int i6, int i7, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  indices.push_back(i3);
+  indices.push_back(i4);
+  indices.push_back(i5);
+  indices.push_back(i6);
+  indices.push_back(i7);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+void GammaComboEngine::addSubsetPdf( int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, int i6, int i7, int i8, TString title )
+{
+  vector<int> indices;
+  indices.push_back(i1);
+  indices.push_back(i2);
+  indices.push_back(i3);
+  indices.push_back(i4);
+  indices.push_back(i5);
+  indices.push_back(i6);
+  indices.push_back(i7);
+  indices.push_back(i8);
+  addSubsetPdf(id, pdf, indices, title);
+}
+
+///
 /// Add a Combiner to the GammaComboEngine object.
 ///
 void GammaComboEngine::addCombiner(int id, Combiner* cmb)
 {
-	if ( cmb==0 ){
+	if (runOnDataSet) {
+    cout << "GammaComboEngine::addCombiner() : ERROR : You're trying to make a combiner but the runOnDataSet flag is true. You cannot make a combination with this option" << endl;
+    exit(1);
+  }
+
+  if ( cmb==0 ){
 		cout << "GammaComboEngine::addCombiner() : ERROR : Trying to add zero pointer as the Combiner. Exit." << endl;
 		exit(1);
 	}
@@ -109,7 +318,12 @@ void GammaComboEngine::addCombiner(int id, Combiner* cmb)
 ///
 void GammaComboEngine::cloneCombiner(int newId, int oldId, TString name, TString title)
 {
-	if ( combinerExists(newId) ){
+	if ( runOnDataSet ) {
+    cout << "GammaComboEngine::cloneCombiner() : ERROR : You're trying to clone a combiner but the runOnDataSet flag is true. You can't have combiners when using the dataset option." << endl;
+    exit(1);
+  }
+
+  if ( combinerExists(newId) ){
 		cout << "GammaComboEngine::cloneCombiner() : ERROR : Requested new Combiner id " << newId << " exists already in GammaComboEngine. Exit." << endl;
 		exit(1);
 	}
@@ -127,7 +341,7 @@ void GammaComboEngine::cloneCombiner(int newId, int oldId, TString name, TString
 Combiner* GammaComboEngine::getCombiner(int id) const
 {
 	if ( !combinerExists(id) ){
-		cout << "GammaComboEngine::getCombiner() : ERROR : Requested Combiner id doesn't exist in GammaComboEngine. Exit." << endl;
+		cout << "GammaComboEngine::getCombiner() : ERROR : Requested Combiner id " << id << " doesn't exist in GammaComboEngine. Exit." << endl;
 		exit(1);
 	}
 	return cmb[id];
@@ -234,6 +448,40 @@ void GammaComboEngine::scaleDownErrors()
 
 	cout << endl;
 }
+
+///
+/// scale stat errors
+///
+void GammaComboEngine::scaleStatErrors()
+{
+  cout << "\nConfiguration: Scaling ALL STAT ERRORS by " << arg->scalestaterr << ".\n" << endl;
+  for ( int i=0; i<pdf.size(); i++ ){
+    if ( pdf[i]==0 ) continue;
+    for ( int iObs=0; iObs<pdf[i]->getNobs(); iObs++ ) {
+      pdf[i]->StatErr[iObs] *= arg->scalestaterr;
+    }
+    pdf[i]->buildCov();
+    pdf[i]->buildPdf();
+  }
+}
+
+///
+/// scale stat+syst errors
+///
+void GammaComboEngine::scaleStatAndSystErrors()
+{
+  cout << "\nConfiguration: Scaling ALL STAT AND SYST ERRORS by " << arg->scaleerr << ".\n" << endl;
+  for ( int i=0; i<pdf.size(); i++ ){
+    if ( pdf[i]==0 ) continue;
+    for ( int iObs=0; iObs<pdf[i]->getNobs(); iObs++ ) {
+      pdf[i]->StatErr[iObs] *= arg->scaleerr;
+      pdf[i]->StatErr[iObs] *= arg->scaleerr;
+    }
+    pdf[i]->buildCov();
+    pdf[i]->buildPdf();
+  }
+}
+
 
 ///
 /// disable systematics
@@ -438,6 +686,14 @@ void GammaComboEngine::loadAsimovPoint(Combiner* c, int cId)
 ///
 void GammaComboEngine::usage()
 {
+  if ( runOnDataSet ) {
+    cout << "USAGE\n\n"
+      "  # Compute limit on parameter a:\n"
+      "  " << execname << " --var a --ps 1\n\n"
+      "  # Compute limits on two parameters a and b:\n"
+      "  " << execname << " --var a --var b --ps 1\n\n" << endl;
+    exit(0);
+  }
 	cout << "USAGE\n\n"
 		"  # Compute combination 1, make a 1D Prob scan for variable a_gaus:\n"
 		"  " << execname << " -c 1 -i --var a_gaus --ps 1\n\n"
@@ -510,7 +766,11 @@ void GammaComboEngine::print()
 ///
 void GammaComboEngine::checkCombinationArg()
 {
-	if ( arg->combid.size()==0 ){
+	if ( runOnDataSet && arg->combid.size()>0 ) {
+    cout << "When running on a dataset do not pass a combination argument (it makes no sense for this use case)" << endl;
+    exit(1);
+  }
+  if ( arg->combid.size()==0 && !runOnDataSet){
 		cout << "Please chose a combination ID (-c).\n" << endl;
 		printCombinations();
 		exit(1);
@@ -578,7 +838,9 @@ void GammaComboEngine::checkColorArg()
 ///
 void GammaComboEngine::makeAddDelCombinations()
 {
-	// sanity check: the combid and combmodifications vectors should
+	if (runOnDataSet) return;
+
+  // sanity check: the combid and combmodifications vectors should
 	// be the same size
 	if ( arg->combmodifications.size() != arg->combid.size() ){
 		cout << "GammaComboEngine::makeAddDelCombinations() : ERROR : internal inconsistency. \n"
@@ -657,6 +919,9 @@ void GammaComboEngine::customizeCombinerTitles()
 			if ( arg->title[i]!=TString("default") ) c->setTitle(arg->title[i]);
 		}
 	}
+  if ( runOnDataSet ) {
+    pdf[0]->setTitle(arg->title[0]);
+  }
 }
 
 ///
@@ -678,6 +943,7 @@ void GammaComboEngine::setUpPlot()
 ///
 void GammaComboEngine::savePlot()
 {
+  if ( arg->hfagLabel!="" ) HFAGLabel( arg->hfagLabel, arg->plotHFAGLabelPosX, arg->plotHFAGLabelPosY, arg->plotHFAGLabelScale );
 	plot->save();
 }
 
@@ -689,28 +955,32 @@ void GammaComboEngine::savePlot()
 void GammaComboEngine::defineColors()
 {
 	// no --color option was given on the command line
-	if ( arg->color.size()==0 )
-	{
+	//if ( arg->color.size()==0 )
+	//{
 		// define line colors for 1-CL curves
-		colorsLine.push_back(arg->combid.size()==1 ? kBlue-8 : kBlue-5);
+		colorsLine.push_back(arg->combid.size()<=1 ? kBlue-8 : kBlue-5);
 		colorsLine.push_back(kGreen-8);
 		colorsLine.push_back(kOrange-8);
-		colorsLine.push_back(kViolet-7);
+		colorsLine.push_back(kMagenta-6);
 
 		// define text colors for drawn central values
 		colorsText.push_back(arg->combid.size()==1 ? kBlack : TColor::GetColor("#23236b"));
 		colorsText.push_back(TColor::GetColor("#234723"));
 		colorsText.push_back(kOrange+3);
-		colorsText.push_back(kViolet-7);
-	}
-	else
-	{
-		colorsLine.push_back(TColor::GetColor("#1b9e77"));
-		colorsLine.push_back(TColor::GetColor("#d95f02"));
-		colorsLine.push_back(TColor::GetColor("#7570b3"));
-		colorsLine.push_back(TColor::GetColor("#e7298a"));
-		colorsLine.push_back(TColor::GetColor("#66a61e"));
-		colorsLine.push_back(TColor::GetColor("#e6ab02"));
+		colorsText.push_back(kMagenta-8);
+	//}
+	//else
+	//{
+		colorsLine.push_back(TColor::GetColor("#1b9e77")); // sea green
+		colorsLine.push_back(TColor::GetColor("#d95f02")); // dark orange
+		colorsLine.push_back(TColor::GetColor("#7570b3")); // medium purple
+		colorsLine.push_back(TColor::GetColor("#e7298a")); // medium violet red
+		colorsLine.push_back(TColor::GetColor("#66a61e")); // forest green
+		colorsLine.push_back(TColor::GetColor("#e6ab02")); // goldenrod
+    colorsLine.push_back(TColor::GetColor("#a6761d")); // chocolate
+    colorsLine.push_back(TColor::GetColor("#e31a1c")); // red
+    colorsLine.push_back(TColor::GetColor("#984ea3")); // darkish purple
+    colorsLine.push_back(kBlack); 										 // black
 
 		// from http://colorbrewer2.org with:
 		//   number of data classes: 6
@@ -718,15 +988,85 @@ void GammaComboEngine::defineColors()
 		//   second colour scheme
 
 		ColorBuilder cb;
-		for ( int i=0; i<colorsLine.size(); i++ ){
-			colorsText.push_back(cb.darklightcolor(colorsLine[i], 0.5));
-		}
-	}
+
+		for ( int i=4; i<colorsLine.size(); i++ ){
+      //colorsText.push_back(cb.darklightcolor(colorsLine[i], 0.5));
+		  colorsText.push_back( colorsLine[i] );
+    }
+    //}
 
 	// default for any additional scanner
 	for ( int i=colorsLine.size(); i<arg->combid.size(); i++ ){
 		colorsLine.push_back(kBlue-8 + i);
 		colorsText.push_back(kBlue-2 + i);
+	}
+
+  // sort out the fill style vector
+  for ( int i=0; i<arg->combid.size(); i++ ) {
+    if ( i>= arg->fillstyle.size() ) fillStyles.push_back( 1001 );
+    else fillStyles.push_back( arg->fillstyle[i] );
+  }
+  // sort out the fill color vector
+  for ( int i=0; i<arg->combid.size(); i++ ) {
+    // if --fillcolor passed use this
+    if ( i>= arg->fillcolor.size() ) fillColors.push_back( colorsLine[i] );
+    else fillColors.push_back( arg->fillcolor[i] );
+    // if --color passed use this
+    if ( i < arg->color.size() ) {
+      if ( arg->color[i] < colorsLine.size() ) fillColors[i] = colorsLine[arg->color[i]];
+      else fillColors[i] = colorsLine[i];
+    }
+  }
+  // sort out the fill transparency vector
+  for ( int i=0; i<arg->combid.size(); i++ ) {
+    if ( i>= arg->filltransparency.size() ) fillTransparencies.push_back( 0. );
+    else fillTransparencies.push_back( arg->filltransparency[i] );
+  }
+
+  // sort out the line width vector
+  for ( int i=0; i<arg->combid.size(); i++ ) {
+    if ( i>= arg->linewidth.size() ) lineWidths.push_back( 2 );
+    else lineWidths.push_back( arg->linewidth[i] );
+  }
+  // sort out the line style vector
+  for ( int i=0; i<arg->combid.size(); i++ ) {
+    if ( i>= arg->linestyle.size() ) lineStyles.push_back( 1 );
+    else lineStyles.push_back( arg->linestyle[i] );
+  }
+  // sort out the line color vector
+  for ( int i=0; i<arg->combid.size(); i++ ) {
+    // if --linecolor passed use this
+    if ( i>= arg->linecolor.size() ) lineColors.push_back( colorsLine[i] );
+    else lineColors.push_back( arg->linecolor[i] );
+    // if --color passed use this
+    if ( i < arg->color.size() ) {
+      if ( arg->color[i] < colorsLine.size() ) lineColors[i] = colorsLine[arg->color[i]];
+      else lineColors[i] = colorsLine[i];
+    }
+  }
+	// catch for datasets
+	if ( arg->combid.size()==0 ) {
+		//sort out fill style
+		if ( arg->fillstyle.size()>0 ) fillStyles.push_back( arg->fillstyle[0] );
+		else fillStyles.push_back(1001);
+		//sort out fill color
+		if ( arg->fillcolor.size()>0 ) fillColors.push_back( arg->fillcolor[0] );
+		else fillColors.push_back(colorsLine[0]);
+		//sort out line width
+    	if ( arg->linewidth.size()>0 ) lineWidths.push_back( arg->linewidth[0] );
+    	else lineWidths.push_back(2);
+    	//sort out line style
+    	if ( arg->linestyle.size()>0 ) lineStyles.push_back( arg->linestyle[0] );
+    	else lineStyles.push_back(1);
+    	//sort out line color
+    	if ( arg->linecolor.size()>0 ) lineColors.push_back( arg->linecolor[0] );
+    	else lineColors.push_back(colorsLine[0]);
+    	//sort out fill transparency
+    	if ( arg->filltransparency.size()>0 ) fillTransparencies.push_back( arg->filltransparency[0] );
+    	else fillTransparencies.push_back(.0);
+		//sort out total color if not line and fill color defined before
+		if ( arg->color.size()>0 && arg->color[0] < colorsLine.size() && arg-> linecolor.size()==0) lineColors[0]=colorsLine[arg->color[0]];
+		if ( arg->color.size()>0 && arg->color[0] < colorsLine.size() && arg-> fillcolor.size()==0) fillColors[0]=colorsLine[arg->color[0]];
 	}
 }
 
@@ -742,26 +1082,44 @@ void GammaComboEngine::scanStrategy2d(MethodProbScan *scanner, ParameterCache *p
 			" 1. scan in first variable:  " + scanner->getScanVar1Name() + "\n"
 			" 2. scan in second variable: " + scanner->getScanVar2Name() + "\n"
 			" 3. scan starting from each solution found in 1. and 2." << endl;
+
+		// setup a scanner for each variable individually
 		Combiner *c = scanner->getCombiner();
+		MethodProbScan *s1;
+		MethodProbScan *s2;
+
 		cout << "\n1D scan for X variable, " + scanner->getScanVar1Name() + ":\n" << endl;
-		MethodProbScan *s1 = new MethodProbScan(c);
+		if ( runOnDataSet ) {
+			const MethodDatasetsProbScan* temp = dynamic_cast<MethodDatasetsProbScan*>(scanner);
+			s1 = new MethodDatasetsProbScan( temp->pdf, arg );
+		}
+		else {
+			s1 = new MethodProbScan(c);
+		}
 		s1->setScanVar1(scanner->getScanVar1Name());
 		s1->initScan();
 		scanStrategy1d(s1,pCache);
 		if ( arg->verbose ) s1->printLocalMinima();
 
 		cout << "\n1D scan for Y variable, " + scanner->getScanVar2Name() + ":\n" << endl;
-		MethodProbScan *s2 = new MethodProbScan(c);
+		if ( runOnDataSet ) {
+			const MethodDatasetsProbScan* temp = dynamic_cast<MethodDatasetsProbScan*>(scanner);
+			s2 = new MethodDatasetsProbScan( temp->pdf, arg );
+		}
+		else {
+			s2 = new MethodProbScan(c);
+		}
 		s2->setScanVar1(scanner->getScanVar2Name());
 		s2->setXscanRange(arg->scanrangeyMin,arg->scanrangeyMax);
 		s2->initScan();
 		scanStrategy1d(s2,pCache);
 		if ( arg->verbose ) s2->printLocalMinima();
 
+		// now do the 2D scan from the two starting points
 		cout << "\n2D scan for " + scanner->getScanVar1Name() + " and " + scanner->getScanVar2Name() + ":\n" << endl;
 		vector<RooSlimFitResult*> solutions;
-		for ( int i=0; i<s1->getNSolutions(); i++ ) solutions.push_back(s1->getSolution(i));
-		for ( int i=0; i<s2->getNSolutions(); i++ ) solutions.push_back(s2->getSolution(i));
+		for ( int i=0; i<s1->getSolutions().size(); i++ ) solutions.push_back(s1->getSolution(i));
+		for ( int i=0; i<s2->getSolutions().size(); i++ ) solutions.push_back(s2->getSolution(i));
 		// \todo remove similar solutions from list
 		for ( int j=0; j<solutions.size(); j++ ){
 			cout << "2D scan " << j+1 << " of " << solutions.size() << " ..." << endl;
@@ -800,7 +1158,10 @@ void GammaComboEngine::make1dProbScan(MethodProbScan *scanner, int cId)
 	cout << "\nResults:" << endl;
 	cout <<   "========\n" << endl;
 	scanner->printLocalMinima();
+  	scanner->saveLocalMinima(m_fnamebuilder->getFileNameSolution(scanner));
+	scanner->computeCLvalues();
 	scanner->calcCLintervals();
+	if (arg->cls.size()>0) scanner->calcCLintervals(1); // for prob method CLsType>1 doesn't exist
 	if (!arg->isAction("pluginbatch") && !arg->plotpluginonly){
 		if ( arg->plotpulls ) scanner->plotPulls();
 		if ( arg->parevol ){
@@ -834,6 +1195,10 @@ void GammaComboEngine::make1dPluginScan(MethodPluginScan *scannerPlugin, int cId
 	else {
 		scannerPlugin->readScan1dTrees(arg->jmin[cId],arg->jmax[cId]);
 		scannerPlugin->calcCLintervals();
+		for (int i=0; i<arg->cls.size(); i++){
+			scannerPlugin->calcCLintervals(arg->cls[i]);
+			if (arg->cls[i]==2) scannerPlugin->calcCLintervals(arg->cls[i], true); //calculate expected upper limit
+		}
 	}
 	if ( !arg->isAction("pluginbatch") ){
 		scannerPlugin->saveScanner(m_fnamebuilder->getFileNameScanner(scannerPlugin));
@@ -866,6 +1231,56 @@ void GammaComboEngine::make2dPluginScan(MethodPluginScan *scannerPlugin, int cId
 }
 
 ///
+/// Perform the 1D berger boos scan. Runs toys in batch mode, and
+/// reads them back in.
+///
+/// \param scannerPlugin - the scanner to run the scan with
+/// \param cId - the id of this combination on the command line
+///
+void GammaComboEngine::make1dBergerBoosScan(MethodBergerBoosScan *scannerBergerBoos, int cId)
+{
+	scannerBergerBoos->initScan();
+  scannerBergerBoos->setNBergerBoosPointsPerScanpoint( arg->nBBpoints );
+	if ( arg->isAction("bbbatch") ){
+		scannerBergerBoos->scan1d(arg->nrun);
+	}
+	else {
+		scannerBergerBoos->readScan1dTrees(arg->jmin[cId],arg->jmax[cId]);
+		scannerBergerBoos->calcCLintervals();
+	}
+	if ( !arg->isAction("bbbatch") ){
+		scannerBergerBoos->saveScanner(m_fnamebuilder->getFileNameScanner(scannerBergerBoos));
+	}
+}
+
+/// Perform the coverage scanner
+///
+/// \param scanner - the scanner to run the scan with
+/// \param cId - the id of this combination on the command line
+void GammaComboEngine::make1dCoverageScan(MethodCoverageScan *scanner, int cId)
+{
+  // load coverage point parameters (this can be done automatically)
+  ParameterCache *pCache = new ParameterCache(arg);
+  if ( arg->loadParamsFile.size() != arg->combid.size() ) {
+    cout << "\nERROR : For a Coverage scan you must pass a parameter file (--parfile) to throw the toys from. You need one parfile per combiner" << endl;
+    exit(1);
+  }
+  pCache->loadPoints( arg->loadParamsFile[cId] );
+
+  // do scan
+  scanner->initScan();
+  scanner->setParameterCache( pCache ); // this can be passed directly to scan
+  if ( arg->isAction("coveragebatch") ) {
+    scanner->scan1d(arg->nrun);
+  }
+  else {
+    scanner->readScan1dTrees( arg->jmin[cId], arg->jmax[cId] );
+    scanner->saveScanner( m_fnamebuilder->getFileNameScanner( scanner ) );
+  }
+
+}
+
+///
 /// Make a 1D plot of a Prob scanner. The scanner can either be a "fresh"
 /// one, as made in make1dProbScan(), or a loaded one.
 /// \param scanner - the scanner to plot
@@ -873,13 +1288,25 @@ void GammaComboEngine::make2dPluginScan(MethodPluginScan *scannerPlugin, int cId
 ///
 void GammaComboEngine::make1dProbPlot(MethodProbScan *scanner, int cId)
 {
-	if (!arg->isAction("pluginbatch") && !arg->plotpluginonly){
+
+  	if (!arg->isAction("pluginbatch") && !arg->plotpluginonly){
 		scanner->setDrawSolution(arg->plotsolutions[cId]);
+		if(arg->isAction("plugin")||arg->isAction("plot")) scanner->computeCLvalues();	// compute new CL values depending on test stat, even if not a rescan is wished
+    	if ( arg->cls.size()>0 ) {
+      		if ( runOnDataSet ) ((MethodDatasetsProbScan*)scanner)->plotFitRes(m_fnamebuilder->getFileNamePlot(cmb)+"_fit");
+      		scanner->plotOn(plot, 1); // for prob ClsType>1 doesn't exist
+    	}
 		scanner->plotOn(plot);
 		int colorId = cId;
 		if ( arg->color.size()>cId ) colorId = arg->color[cId];
-		scanner->setLineColor(colorsLine[colorId]);
-		scanner->setTextColor(colorsText[cId]);
+		//scanner->setLineColor(colorsLine[colorId]);
+		scanner->setTextColor(colorsText[colorId]);
+	    scanner->setLineColor(lineColors[cId]);
+	    scanner->setLineStyle(lineStyles[cId]);
+	    scanner->setLineWidth(lineWidths[cId]);
+	    scanner->setFillColor(fillColors[cId]);
+	    scanner->setFillStyle(fillStyles[cId]);
+	    scanner->setFillTransparency(fillTransparencies[cId]);
 		plot->Draw();
 	}
 }
@@ -901,12 +1328,12 @@ void GammaComboEngine::scanStrategy1d(MethodProbScan *scanner, ParameterCache *p
 		cout << "first scan ..." << endl;
 		scanner->scan1d();
 		if ( !arg->probforce ){
-      vector<RooSlimFitResult*> firstScanSolutions = scanner->getSolutions();
+			vector<RooSlimFitResult*> firstScanSolutions = scanner->getSolutions();
 			for ( int i=0; i<firstScanSolutions.size(); i++ ){
-        cout << "Scan i: " << i << endl;
-        //scanner->loadSolution(i);
-        scanner->loadParameters(firstScanSolutions[i]);
-        scanner->scan1d(true);
+				cout << "Scan i: " << i << endl;
+				//scanner->loadSolution(i);
+				scanner->loadParameters(firstScanSolutions[i]);
+				scanner->scan1d(true);
 			}
 		}
 	}
@@ -933,17 +1360,20 @@ void GammaComboEngine::scanStrategy1d(MethodProbScan *scanner, ParameterCache *p
 void GammaComboEngine::make1dPluginPlot(MethodPluginScan *sPlugin, MethodProbScan *sProb, int cId)
 {
 	if ( arg->isQuickhack(17) ) {
-    make1dPluginOnlyPlot(sPlugin, cId);
-    sProb->setLineColor(kBlack);
-    sProb->setDrawSolution(arg->plotsolutions[cId]);
-    sProb->plotOn(plot);
-  }
-  else {
-    make1dProbPlot(sProb, cId);
-    sPlugin->setLineColor(kBlack);
-    sPlugin->setDrawSolution(arg->plotsolutions[cId]);
-    sPlugin->plotOn(plot);
-  }
+		make1dPluginOnlyPlot(sPlugin, cId);
+		sProb->setLineColor(kBlack);
+		sProb->setDrawSolution(arg->plotsolutions[cId]);
+		if(arg->cls.size()>0) sProb->plotOn(plot, 1);
+		sProb->plotOn(plot);
+	}
+	else {
+		make1dProbPlot(sProb, cId);
+		sPlugin->setLineColor(kBlack);
+		sPlugin->setDrawSolution(arg->plotsolutions[cId]);
+		if(std::count(arg->cls.begin(),arg->cls.end(),1)) sPlugin->plotOn(plot, 1);
+		if(std::count(arg->cls.begin(),arg->cls.end(),2)) sPlugin->plotOn(plot, 2);
+		sPlugin->plotOn(plot);
+	}
 	plot->Draw();
 }
 
@@ -959,25 +1389,31 @@ void GammaComboEngine::make1dPluginPlot(MethodPluginScan *sPlugin, MethodProbSca
 void GammaComboEngine::make2dPluginPlot(MethodPluginScan *sPlugin, MethodProbScan *sProb, int cId)
 {
 	if ( arg->isQuickhack(18) ) {
-    sProb->setTitle(sProb->getTitle() + "PROB");
-    sPlugin->setTitle(sPlugin->getTitle() + "PLUGIN");
-  }
-  else {
-    sProb->setTitle(sProb->getTitle() + " (Prob)");
-    sPlugin->setTitle(sPlugin->getTitle() + " (Plugin)");
-  }
+		sProb->setTitle(sProb->getTitle() + "PROB");
+		sPlugin->setTitle(sPlugin->getTitle() + "PLUGIN");
+	}
+	else {
+		sProb->setTitle(sProb->getTitle() + " (Prob)");
+		sPlugin->setTitle(sPlugin->getTitle() + " (Plugin)");
+	}
 	sProb->setDrawSolution(arg->plotsolutions[cId]);
-	sProb->setLineColor(colorsLine[cId]);
+  //sProb->setLineColor(colorsLine[cId]);
+  sProb->setLineColor(lineColors[cId]);
+  sProb->setLineStyle(lineStyles[cId]);
+  sProb->setLineWidth(lineWidths[cId]);
+  sProb->setFillColor(fillColors[cId]);
+  sProb->setFillStyle(fillStyles[cId]);
+  sProb->setFillTransparency(fillTransparencies[cId]);
 	sPlugin->setDrawSolution(arg->plotsolutions[cId]);
 	if ( arg->isQuickhack(17) ) {
-    sPlugin->plotOn(plot);
-    sProb->plotOn(plot);
-  }
-  else {
-    sProb->plotOn(plot);
-    sPlugin->plotOn(plot);
-  }
-	plot->Draw();
+		sPlugin->plotOn(plot);
+		sProb->plotOn(plot);
+	}
+	else {
+		sProb->plotOn(plot);
+		sPlugin->plotOn(plot);
+	}
+		plot->Draw();
 }
 
 ///
@@ -992,9 +1428,15 @@ void GammaComboEngine::make1dPluginOnlyPlot(MethodPluginScan *sPlugin, int cId)
 	((OneMinusClPlot*)plot)->setPluginMarkers(false);
 	int colorId = cId;
 	if ( arg->color.size()>cId ) colorId = arg->color[cId];
-	sPlugin->setLineColor(colorsLine[colorId]);
 	sPlugin->setTextColor(colorsText[colorId]);
+  sPlugin->setLineColor(lineColors[cId]);
+  sPlugin->setLineStyle(lineStyles[cId]);
+  sPlugin->setLineWidth(lineWidths[cId]);
+  sPlugin->setFillColor(fillColors[cId]);
+  sPlugin->setFillStyle(fillStyles[cId]);
+  sPlugin->setFillTransparency(fillTransparencies[cId]);
 	sPlugin->setDrawSolution(arg->plotsolutions[cId]);
+  for (int i=0; i<arg->cls.size(); i++) sPlugin->plotOn(plot, arg->cls[i]);
 	sPlugin->plotOn(plot);
 	plot->Draw();
 }
@@ -1010,6 +1452,17 @@ void GammaComboEngine::make2dPluginOnlyPlot(MethodPluginScan *sPlugin, int cId)
 	sPlugin->setDrawSolution(arg->plotsolutions[cId]);
 	sPlugin->plotOn(plot);
 	plot->Draw();
+}
+
+///
+/// Make the 1D coverage plot
+///
+/// \param scanner - the coverage scanner
+/// \param cId - the id of this combination on the command line
+///
+void GammaComboEngine::make1dCoveragePlot(MethodCoverageScan *scanner, int cId)
+{
+  scanner->plot();
 }
 
 ///
@@ -1042,18 +1495,39 @@ void GammaComboEngine::make2dProbScan(MethodProbScan *scanner, int cId)
 void GammaComboEngine::make2dProbPlot(MethodProbScan *scanner, int cId)
 {
 	// plot full
-	OneMinusClPlot2d* plotf = new OneMinusClPlot2d(arg, m_fnamebuilder->getFileNamePlotSingle(cmb, cId)+"_full", "p-value histogram: "+scanner->getTitle());
-	scanner->plotOn(plotf);
+	OneMinusClPlot2d* plotf;
+	if (scanner->getMethodName()=="Prob") plotf = new OneMinusClPlot2d(arg, m_fnamebuilder->getFileNamePlotSingle(cmb, cId)+"_full", "p-value histogram: "+scanner->getTitle());
+	else if (scanner->getMethodName()=="DatasetsProb") plotf = new OneMinusClPlot2d(arg, m_fnamebuilder->getFileNamePlot(cmb)+"_full", "p-value histogram: "+scanner->getTitle());	//Titus: change to make datasets plot possible
+	else cout << "The name of the scanner matches neither Prob nor DatasetsProb!" << endl;
+	scanner->plotOn(plotf,0);
 	plotf->DrawFull();
 	plotf->save();
+	// plot full CLs
+  if ( arg->cls.size()>0 ) {
+    OneMinusClPlot2d* plotfcls;
+    if (scanner->getMethodName()=="Prob") plotfcls = new OneMinusClPlot2d(arg, m_fnamebuilder->getFileNamePlotSingle(cmb, cId)+"_cls_full", "p-value histogram: "+scanner->getTitle());
+    else if (scanner->getMethodName()=="DatasetsProb") plotfcls = new OneMinusClPlot2d(arg, m_fnamebuilder->getFileNamePlot(cmb)+"_cls_full", "p-value histogram: "+scanner->getTitle());	//Titus: change to make datasets plot possible
+    else cout << "The name of the scanner matches neither Prob nor DatasetsProb!" << endl;
+    scanner->plotOn(plotfcls,1);
+    plotfcls->DrawFull();
+    plotfcls->save();
+  }
 	// contour plot
 	scanner->setDrawSolution(arg->plotsolutions[cId]);
-	scanner->setLineColor(colorsLine[cId]);
-	scanner->plotOn(plot);
+  //scanner->setLineColor(colorsLine[cId]);
+  scanner->setLineColor(lineColors[cId]);
+  scanner->setLineStyle(lineStyles[cId]);
+  scanner->setLineWidth(lineWidths[cId]);
+  scanner->setFillColor(fillColors[cId]);
+  scanner->setFillStyle(fillStyles[cId]);
+  scanner->setFillTransparency(fillTransparencies[cId]);
+	if(arg->cls.size()>0) scanner->plotOn(plot, 1);
+	scanner->plotOn(plot, 0);
 	// only draw the plot once when multiple scanners are plotted,
 	// else we end up with too many graphs, and the transparency setting
 	// gets screwed up
-	if ( cId==arg->combid.size()-1 ){
+	// Titus: also draw the plot, if no combiner is set (datasets case)
+	if ( cId==arg->combid.size()-1 || arg->combid.empty()){
 		plot->Draw();
 		plot->Show();
 	}
@@ -1080,9 +1554,38 @@ void GammaComboEngine::adjustRanges(Combiner *c, int cId)
 {
 	if ( cId<arg->physRanges.size() ){
 		for ( int j=0; j<arg->physRanges[cId].size(); j++ ){
-			c->adjustPhysRange(arg->physRanges[cId][j].name, arg->physRanges[cId][j].min, arg->physRanges[cId][j].max);
+	  c->adjustPhysRange(arg->physRanges[cId][j].name, arg->physRanges[cId][j].min, arg->physRanges[cId][j].max);
 		}
 	}
+  if ( cId<arg->removeRanges.size() ){
+	for ( int j=0; j<arg->removeRanges[cId].size(); j++ ) {
+	  if ( arg->removeRanges[cId][j] == "all" ) {
+		const RooArgSet *pars = (RooArgSet*)c->getParameters();
+		TIterator *it = pars->createIterator();
+		while ( RooRealVar* par = (RooRealVar*)it->Next() ) {
+		  par->removeRange();
+		}
+	  }
+	  else {
+		c->adjustPhysRange( arg->removeRanges[cId][j], -999, -999 );
+	  }
+	}
+  }
+}
+
+///
+/// Helper function for scan(): Makes named sets for any toy variations that were requested
+///
+void GammaComboEngine::setupToyVariationSets(Combiner *c, int cId)
+{
+  if ( cId < arg->randomizeToyVars.size() ) {
+    TString toyVarList = "";
+    for ( int j=0; j<arg->randomizeToyVars[cId].size(); j++ ) {
+      toyVarList += arg->randomizeToyVars[cId][j];
+      if ( j < arg->randomizeToyVars[cId].size()-1 ) toyVarList += ",";
+    }
+    c->getWorkspace()->defineSet( "toy_"+c->getPdfName(), toyVarList.Data() );
+  }
 }
 
 ///
@@ -1138,13 +1641,319 @@ void GammaComboEngine::tightenChi2Constraint(Combiner *c, TString scanVar)
 	pdf->buildPdf();
 }
 
+// FIXME
+// WARNING - THIS FUNCTION ALLOWS YOU DO SOME INCREDIBLY STUPID THINGS
+//         - SO PLEASE BE CAREFUL WITH IT!
+/// Helper function for scan(). Set observables to values from file
+/// (only possible before combining).
+///
+void GammaComboEngine::setObservablesFromFile(Combiner *c, int cId)
+{
+
+  if ( cId>=arg->readfromfile.size() ) return;
+  if ( arg->readfromfile[cId].size()==0 ) return;
+  if ( arg->readfromfile[cId].size()==1 && arg->readfromfile[cId][0]==TString("default") ) return;
+  if ( arg->readfromfile[cId].size()==1 && arg->readfromfile[cId][0]==TString("") ) return;
+
+  vector<PDF_Abs*> pdfs = c->getPdfs();
+
+  if ( pdfs.size() != arg->readfromfile[cId].size() ) {
+    cout << "ERROR -- I think you are trying to read values from a file but you haven't specified one for each PDF in the combination" << endl;
+    cout << "      -- Pass like this: -c 0:+1,+2,+3 --readfromfile default,<path_to_pdf2_vals.dat>,<path_to_pdf3_vals.dat>" << endl;
+    exit(1);
+  }
+
+  for ( int i=0; i<pdfs.size(); i++ ) {
+
+    // read from the file for this pdf
+    if ( arg->readfromfile[cId][i]==TString("default") ) continue;
+
+    //
+    ifstream infile( arg->readfromfile[cId][i].Data() );
+    if ( ! infile.is_open() ) {
+      cerr << "No such read file found: " << arg->readfromfile[cId][i] << endl;
+      exit(1);
+    }
+    string line;
+    bool pdfExists = false;
+    bool pdfFound = false;
+    while ( getline(infile,line) ) {
+      if ( line.empty() ) continue; // blank line
+      if ( boost::starts_with(line,"#") ) continue; // these are comments
+      if ( boost::starts_with(line, Form("pdf: %s",pdfs[i]->getBaseName().Data()) ) ) {
+        pdfFound = true; // this is the pdf we are looking for
+        pdfExists = true; // keep track of whether it's even there or not
+      }
+      else if ( boost::starts_with(line, "pdf:") ) pdfFound = false; // this is some other pdf after the pdf we are looking for
+
+      if ( pdfFound ) {
+        vector<string> els;
+        boost::split(els,line,boost::is_any_of(" "),boost::token_compress_on);
+        TString typ = els[0];
+        if ( typ=="obs:" ) {
+          TString name = els[1];
+          double val = boost::lexical_cast<double>(els[2]);
+          pdfs[i]->setObservable( name, val );
+          pdfs[i]->obsValSource = "Read from file " + arg->readfromfile[cId][i];
+        }
+        else if ( typ=="err:" ) {
+          TString name = els[1];
+          double stat = boost::lexical_cast<double>(els[2]);
+          double syst = boost::lexical_cast<double>(els[3]);
+          pdfs[i]->setUncertainty( name, stat, syst );
+          pdfs[i]->obsErrSource = "Read from file " + arg->readfromfile[cId][i];
+        }
+        else if ( typ=="cor:" ) {
+          int mi = boost::lexical_cast<int>(els[1]);
+          int mj = boost::lexical_cast<int>(els[2]);
+          double corStat = boost::lexical_cast<double>(els[3]);
+          double corSyst = boost::lexical_cast<double>(els[4]);
+          pdfs[i]->corStatMatrix[mi][mj] = corStat;
+          pdfs[i]->corSystMatrix[mi][mj] = corSyst;
+          pdfs[i]->corStatMatrix[mj][mi] = corStat;
+          pdfs[i]->corSystMatrix[mj][mi] = corSyst;
+          pdfs[i]->corSource = "Read from file " + arg->readfromfile[cId][i];
+        }
+      }
+    }
+    infile.close();
+    if ( pdfExists ) {
+      pdfs[i]->storeErrorsInObs();
+      pdfs[i]->buildCov();
+      pdfs[i]->buildPdf();
+    }
+    else {
+      cout << "WARNING - did not find any pdf named: " << pdfs[i]->getBaseName() << " in file: " << arg->readfromfile[cId][i] << endl;
+    }
+  }
+
+}
+
 ///
 /// write batch scripts
 ///
 void GammaComboEngine::writebatchscripts()
 {
-  m_batchscriptwriter->writeScripts(arg, &cmb);
-  exit(0);
+	if (runOnDataSet){
+		m_batchscriptwriter->writeScripts_datasets(arg, getPdf(0));
+	}
+	else{
+		m_batchscriptwriter->writeScripts(arg, &cmb);
+	}
+  	exit(0);
+}
+
+///
+/// make latex
+///
+void GammaComboEngine::makeLatex(Combiner *c)
+{
+  for ( unsigned int p=0; p < c->getPdfs().size(); p++) {
+	PDF_Abs *pdf = c->getPdfs()[p];
+	LatexMaker m( c->getName(), pdf );
+	m.writeFile();
+  }
+}
+
+///
+/// save workspace
+///
+void GammaComboEngine::saveWorkspace( Combiner *c, int i )
+{
+  // if --pr then make the ranges
+  if ( arg->enforcePhysRange ) setLimit( c->getParameters(), "phys" );
+
+  // first write a copy THE PDF into the workspace
+  const RooAbsPdf *thePdf         = c->getPdf();
+  const RooArgSet *theParameters  = c->getParameters();
+  const RooArgSet *theObservables = c->getObservables();
+
+  RooAbsPdf *savePdf = (RooAbsPdf*)thePdf->Clone("ThePdf");
+  c->getWorkspace()->import( *savePdf, Silence() );
+  c->getWorkspace()->defineSet( "TheParameters", *theParameters );
+  c->getWorkspace()->defineSet( "TheObservables", *theObservables );
+
+  // set the name of the workspace associated with combiner id
+  int cId = arg->combid[i];
+  c->getWorkspace()->SetName( Form("w%d",cId) );
+
+  // if the first instance then write directly to file
+  if ( i==0 ) {
+    c->getWorkspace()->writeToFile( arg->save );
+  }
+  // otherwise add it to the file
+  else {
+    TFile *tf = TFile::Open( arg->save, "UPDATE" );
+    c->getWorkspace()->Write();
+    tf->Close();
+  }
+}
+
+///
+/// compare combinations
+///
+void GammaComboEngine::compareCombinations( )
+{
+  for ( int i=0; i<comparisonScanners.size(); i++ ) {
+    for ( int j=i+1; j<comparisonScanners.size(); j++ ) {
+      TH2F *pull_corr = new TH2F(Form("c%d_vs_c%d_corr",i,j), Form("; Obs pulls for %s [#sigma]; Obs pulls %s [#sigma]",comparisonScanners[i]->getName().Data(),comparisonScanners[j]->getName().Data()), 10,-5,5,10,-5,5);
+      vector<double> pullVec1;
+      vector<double> pullVec2;
+      double total_pull = 0.;
+      int nmatch = 0;
+      comparisonScanners[i]->loadSolution(0);
+      comparisonScanners[j]->loadSolution(0);
+      const RooArgSet *sc1obs = comparisonScanners[i]->getObservables();
+      const RooArgSet *sc2obs = comparisonScanners[j]->getObservables();
+      TIterator *it1 = sc1obs->createIterator();
+      while ( RooRealVar *pObs1 = (RooRealVar*)it1->Next() ) {
+        TIterator *it2 = sc2obs->createIterator();
+        while ( RooRealVar *pObs2 = (RooRealVar*)it2->Next() ) {
+
+          // look for matches
+          TString pTh1Name = pObs1->GetName();
+          pTh1Name.ReplaceAll("obs", "th");
+          pTh1Name.ReplaceAll("UID",";");
+          pTh1Name = ((TObjString*)pTh1Name.Tokenize(";")->At(0))->GetString();
+          TString pTh2Name = pObs2->GetName();
+          pTh2Name.ReplaceAll("obs", "th");
+          pTh2Name.ReplaceAll("UID",";");
+          pTh2Name = ((TObjString*)pTh2Name.Tokenize(";")->At(0))->GetString();
+
+          if ( pTh1Name == pTh2Name ) {
+            nmatch += 1;
+            pTh1Name = pObs1->GetName();
+            pTh1Name.ReplaceAll("obs", "th");
+            pTh2Name = pObs2->GetName();
+            pTh2Name.ReplaceAll("obs", "th");
+            RooRealVar *pTh1 = (RooRealVar*)comparisonScanners[i]->getTheory()->find(pTh1Name);
+            RooRealVar *pTh2 = (RooRealVar*)comparisonScanners[j]->getTheory()->find(pTh2Name);
+            assert( pTh1 && pTh2 );
+            double pull = (pTh1->getVal() - pTh2->getVal() ) / pObs2->getError();
+            total_pull += pull*pull;
+            double pull1 = (pTh1->getVal() - pObs1->getVal()) / pObs1->getError();
+            double pull2 = (pTh2->getVal() - pObs2->getVal()) / pObs2->getError();
+            pull_corr->Fill( pull1, pull2 );
+            pullVec1.push_back( pull1 );
+            pullVec2.push_back( pull2 );
+          }
+        }
+      }
+      double chi21 = comparisonScanners[i]->getSolution(0)->minNll();
+      double chi22 = comparisonScanners[j]->getSolution(0)->minNll();
+      int    nObs1 = comparisonScanners[i]->getObservables()->getSize();
+      int    nObs2 = comparisonScanners[j]->getObservables()->getSize();
+      int    nPar1 = comparisonScanners[i]->getSolution(0)->floatParsFinal().getSize();
+      int    nPar2 = comparisonScanners[j]->getSolution(0)->floatParsFinal().getSize();
+      CLInterval cl1 = comparisonScanners[i]->getCLinterval(0,1);
+      CLInterval cl2 = comparisonScanners[j]->getCLinterval(0,1);
+      double diff = cl1.central - cl2.central;
+      double corr = Utils::getCorrelationFactor( pullVec1, pullVec2 );
+      double err = 99.;
+      if ( diff > 0 ) { // means value has moved down
+        err = sqrt( sq( cl1.central-cl1.min ) + sq( cl2.max-cl2.central) - 2.*corr*(cl1.central-cl1.min)*(cl2.max-cl2.central) );
+      }
+      else {
+        err = sqrt( sq(cl1.max-cl1.central) + sq( cl2.central-cl2.min)  - 2.*corr*(cl1.max-cl1.central)*(cl2.central-cl2.min));
+      }
+      cout << "Comparison   1): " << Form("%-20s",comparisonScanners[i]->getName().Data()) << " to 2): " << Form("%-20s",comparisonScanners[j]->getName().Data()) << endl;
+      cout << "        chi2:    " << Form("%-20.3f",chi21) << "        " << Form("%-20.3f",chi22) << endl;
+      cout << "        nObs:    " << Form("%-20d",nObs1) << "        " << Form("%-20d",nObs2) << endl;
+      cout << "        nPar:    " << Form("%-20d",nPar1) << "        " << Form("%-20d",nPar2) << endl;
+      cout << "        pval:    " << Form("%-20.2f",100.*TMath::Prob(chi21, nObs1-nPar1)) << "        " << Form("%-20.2f",100.*TMath::Prob(chi22,nObs2-nPar2)) << endl;
+      cout << "         val:    " << Form("%-6.3f",cl1.central) << " [" << Form("%6.3f",cl1.min) << "," << Form("%-6.3f",cl1.max) << "]" << "      " << Form("%-6.3f",cl2.central) << "[" << Form("%6.3f",cl2.min) << "," << Form("%-6.3f",cl2.max) << "]" << endl;
+      cout << "        dval:    " << diff << " +/- " << err << " (" << TMath::Abs(diff)/err << " sigma)" << endl;
+      cout << "PULL PER OBS:  " << total_pull << endl;
+      cout << "CORRELATION:   " << corr << endl;
+      cout << "COMPATIBILITY: " << TMath::Abs(diff)/err << " sigma" << endl;
+
+      TCanvas *canv = newNoWarnTCanvas("pull_corr"+getUniqueRootName());
+      pull_corr->SetMarkerStyle(kMultiply);
+      pull_corr->SetMarkerColor(kBlue+2);
+      pull_corr->GetXaxis()->SetTitleSize(0.045);
+      pull_corr->GetYaxis()->SetTitleSize(0.045);
+      pull_corr->GetXaxis()->SetLabelSize(0.045);
+      pull_corr->GetYaxis()->SetLabelSize(0.045);
+      pull_corr->Draw("scat");
+      TLine *line = new TLine();
+      line->DrawLine(-5,0,5,0);
+      line->DrawLine(0,-5,0,5);
+      pull_corr->Draw("scatsame");
+      TF1 *f1 = new TF1("f1","[0]*x",-5,5);
+      f1->SetParameter(0,corr);
+      f1->Draw("Lsame");
+      TLatex *lat = new TLatex();
+      lat->DrawLatex(3,4,Form("#rho = %3.1f",corr));
+      lat->DrawLatex(3,3,Form("#sigma = %3.1f",TMath::Abs(diff)/err));
+      Utils::savePlot(canv,Form("pull_corr_%s_%s",comparisonScanners[i]->getName().Data(),comparisonScanners[j]->getName().Data()));
+      total_pull = sqrt( total_pull )/nmatch;
+
+    }
+  }
+}
+
+///
+/// run toys
+///
+void GammaComboEngine::runToys( Combiner *c )
+{
+  // THIS IS A HACK FOR NOW
+  //
+  // base scan (overhead here)
+  MethodProbScan *probscan = new MethodProbScan(c);
+  make1dProbScan(probscan,0);
+
+  TString toydirname = TString("root/scan1dToys_")+probscan->getName()+TString("_")+probscan->getScanVar1Name();
+  TString toyfname = toydirname + TString("/scan1dToys_")+probscan->getName()+TString("_")+probscan->getScanVar1Name()+Form("_run%d.root",arg->nrun);
+
+  TTree *tree = new TTree("toys","toys");
+  map<TString,double> vals;
+  map<TString,double> errs;
+  double chi2val = probscan->solutions[0]->minNll();
+  int ntoy = -1;
+  tree->Branch("ntoy", &ntoy);
+  tree->Branch("chi2min", &chi2val);
+  RooArgList fitPars = probscan->solutions[0]->floatParsFinal();
+  TIterator *it = fitPars.createIterator();
+  while ( RooRealVar* p = (RooRealVar*)it->Next() ) {
+    cout << "YO:: " << p->GetName() << endl;
+    vals[p->GetName()] = p->getVal();
+    errs[p->GetName()] = p->getError();
+    tree->Branch( p->GetName()+TString("_val"), &vals[p->GetName()] );
+    tree->Branch( p->GetName()+TString("_err"), &errs[p->GetName()] );
+  }
+  tree->Fill();
+  delete probscan;
+
+  for ( int i=0; i<arg->ntoys; i++ ) {
+    cout << "RUNNING TOY " << i << " / " << arg->ntoys << endl;
+    c->setObservablesToToyValues();
+    MethodProbScan *toyscan = new MethodProbScan(c);
+    make1dProbScan(toyscan,0);
+    if ( toyscan->solutions.size() == 0 ) continue;
+    toyscan->solutions[0]->Print();
+    //cout << "My stuff I want to save" << endl;
+    //cout << "chi2: " << toyscan->solutions[0]->minNll() << endl;
+
+    chi2val = toyscan->solutions[0]->minNll();
+    ntoy = i;
+    RooArgList toyFitPars = toyscan->solutions[0]->floatParsFinal();
+    TIterator *toyit = toyFitPars.createIterator();
+    while ( RooRealVar* p = (RooRealVar*)toyit->Next() ) {
+      //cout << p->GetName() << " " << p->getVal() << " " << p->getError() << endl;
+      vals[p->GetName()] = p->getVal();
+      errs[p->GetName()] = p->getError();
+    }
+    tree->Fill();
+    delete toyscan;
+  }
+  system("mkdir -p "+toydirname);
+  TFile *f = new TFile(toyfname,"recreate");
+  tree->Write();
+  f->Close();
+  delete tree;
+  delete f;
+
 }
 
 ///
@@ -1152,10 +1961,21 @@ void GammaComboEngine::writebatchscripts()
 ///
 void GammaComboEngine::scan()
 {
+  // if we're running with the dataset option then we go off and do that somewhere else
+  if ( runOnDataSet )
+  {
+    scanDataSet();
+    return;
+  }
+
+  // combination scanning action happens here
 	for ( int i=0; i<arg->combid.size(); i++ )
 	{
 		int combinerId = arg->combid[i];
 		Combiner *c = cmb[combinerId];
+
+    // read observable values, uncertainties and correlations from a file
+    setObservablesFromFile(c, i);
 
 		// work with a clone - this way we can easily make plots with the
 		// same combination in twice (once with asimov, for example)
@@ -1179,8 +1999,11 @@ void GammaComboEngine::scan()
 		c->combine();
 		if ( !c->isCombined() ) continue; // error during combining
 
-		// adjust ranges according to the command line - only possible before combining
+		// adjust ranges according to the command line - only possible after combining
 		adjustRanges(c, i);
+
+    // set up parameter sets for the parameters to vary within the toys (if requested)
+    setupToyVariationSets(c, i);
 
 		// make graphviz dot files
 		printCombinerStructure(c);
@@ -1197,9 +2020,13 @@ void GammaComboEngine::scan()
 			c->getWorkspace()->extendSet(c->getParsName(), arg->var[1]);
 		}
 
-		// printout
+		// printout and latex
 		c->print();
 		if ( arg->debug ) c->getWorkspace()->Print("v");
+    if ( arg->save != "" && !arg->saveAtMin ) saveWorkspace( c, i );
+    if ( arg->latex ) makeLatex( c );
+    if ( arg->info || arg->latex || (arg->save!="" && !arg->saveAtMin) ) continue;
+
 
 		/////////////////////////////////////////////////////
 		//
@@ -1207,7 +2034,7 @@ void GammaComboEngine::scan()
 		//
 		/////////////////////////////////////////////////////
 
-		if ( !arg->isAction("plugin") && !arg->isAction("pluginbatch") )
+		if ( !arg->isAction("plugin") && !arg->isAction("pluginbatch") && !arg->isAction("coverage") && !arg->isAction("coveragebatch") && !arg->isAction("bb") && !arg->isAction("bbbatch") )
 		{
 			MethodProbScan *scannerProb = new MethodProbScan(c);
 			// pvalue corrector
@@ -1228,6 +2055,7 @@ void GammaComboEngine::scan()
 					make1dProbScan(scannerProb, i);
 				}
 				make1dProbPlot(scannerProb, i);
+        if ( arg->compare ) comparisonScanners.push_back(scannerProb);
 			}
 			// 2D SCANS
 			else if ( arg->var.size()==2 )
@@ -1346,12 +2174,161 @@ void GammaComboEngine::scan()
 		}
 
 		/////////////////////////////////////////////////////
+		//
+		// COVERAGE
+		//
+		/////////////////////////////////////////////////////
+
+    if ( arg->isAction("coverage") || arg->isAction("coveragebatch") )
+    {
+			if ( arg->var.size()!=1 ) {
+        cerr << "ERROR -- you can only scan in 1D for a coverage check" << endl;
+        exit(1);
+      }
+      MethodCoverageScan *coverageScan = new MethodCoverageScan(c);
+      if ( arg->isAction("coveragebatch") ) {
+        make1dCoverageScan( coverageScan, i );
+      }
+      else if ( arg->isAction("coverage") ) {
+        if ( arg->isAction("plot") ) {
+          if ( FileExists(m_fnamebuilder->getFileNameScanner(coverageScan)) ) {
+            coverageScan->loadScanner(m_fnamebuilder->getFileNameScanner(coverageScan));
+          }
+          else {
+            cout << "\nERROR : Couldn't load the coverage scanner: " << m_fnamebuilder->getFileNameScanner(coverageScan) << endl;
+            exit(1);
+          }
+        }
+        else {
+          make1dCoverageScan( coverageScan, i );
+        }
+        make1dCoveragePlot( coverageScan, i );
+      }
+    }
+
+		// RUN TOYS
+    if (arg->isAction("runtoys")) runToys ( c );
+		/////////////////////////////////////////////////////
+
+    // SAVE WORKSPACE
+    if (arg->save!="" && arg->saveAtMin) saveWorkspace( c, i );
+		/////////////////////////////////////////////////////
 
 		if ( i<arg->combid.size()-1 ) {
 			cout << "\n-- now starting -c " << arg->combid[i+1] << " ------------------------------------------------------------------\n" << endl;
 		}
 	}
 }
+//
+// special scan engine for datasetss
+//
+void GammaComboEngine::scanDataSet()
+{
+   if ( arg->info || arg->latex ) return;
+
+  /////////////////////////////////////////////////////
+  //
+  // PROB - DATASETS
+  //
+  /////////////////////////////////////////////////////
+
+  if ( !arg->isAction("plugin") && !arg->isAction("pluginbatch") && !arg->isAction("coverage") && !arg->isAction("coveragebatch") && !arg->isAction("bb") && !arg->isAction("bbbatch") )
+  {
+    MethodDatasetsProbScan* probScanner = new MethodDatasetsProbScan( (PDF_Datasets*) pdf[0], arg);
+
+		// 1D SCANS
+    if ( arg->var.size()==1 )
+    {
+      if ( arg->isAction("plot") ) {
+        probScanner->loadScanner( m_fnamebuilder->getFileNameScanner(probScanner) );
+      }
+      else {
+        make1dProbScan(probScanner,0);
+      }
+      make1dProbPlot(probScanner,0);
+    }
+		// 2D SCANS
+		else if ( arg->var.size()==2 )
+		{
+			if ( arg->isAction("plot") ){
+				probScanner->loadScanner(m_fnamebuilder->getFileNameScanner(probScanner));
+			}
+			else{
+				make2dProbScan(probScanner, 0);
+			}
+			make2dProbPlot(probScanner, 0);
+		}
+  }
+
+	/////////////////////////////////////////////////////
+  //
+  // PLUGIN - DATASETS
+  //
+  /////////////////////////////////////////////////////
+
+	if(arg->isAction("pluginbatch") || arg->isAction("plugin"))
+	{
+		// 1D SCANS
+		if ( arg->var.size()==1 )
+		{
+				if ( arg->isAction("pluginbatch") ){
+					MethodDatasetsProbScan* scannerProb = new MethodDatasetsProbScan( (PDF_Datasets*) pdf[0], arg);
+					if ( FileExists( m_fnamebuilder->getFileNameScanner(scannerProb)) ) {
+							scannerProb->initScan();
+							scannerProb->loadScanner( m_fnamebuilder->getFileNameScanner(scannerProb));
+					}
+					else{
+							cout << "\nWARNING : Couldn't load the Prob scanner, will rerun the Prob" << endl;
+							cout <<   "          scan now. You should have run the Prob scan locally" << endl;
+							cout <<   "          before running the Plugin scan." << endl;
+							cout <<   "          missing file: " << m_fnamebuilder->getFileNameScanner(scannerProb) << endl;
+							cout << endl;
+							make1dProbScan(scannerProb, 0);
+					}
+					MethodDatasetsPluginScan *scannerPlugin = new MethodDatasetsPluginScan( scannerProb, (PDF_Datasets*) pdf[0], arg);
+					make1dPluginScan(scannerPlugin, 0 );
+				}
+				else if ( arg->isAction("plugin") ) {
+					MethodDatasetsProbScan* scannerProb = new MethodDatasetsProbScan( (PDF_Datasets*) pdf[0], arg);
+					if ( !arg->plotpluginonly || ( arg->plotpluginonly && !arg->isAction("plot") ) ) {
+						if ( FileExists( m_fnamebuilder->getFileNameScanner(scannerProb)) ) {
+							scannerProb->initScan();
+							scannerProb->loadScanner( m_fnamebuilder->getFileNameScanner(scannerProb));
+						}
+						else {
+							cout << "\nWARNING : Couldn't load the Prob scanner, will rerun the Prob" << endl;
+							cout <<   "          scan now. You should have run the Prob scan locally" << endl;
+							cout <<   "          before running the Plugin scan." << endl;
+							cout <<   "          missing file: " << m_fnamebuilder->getFileNameScanner(scannerProb) << endl;
+							cout << endl;
+							make1dProbScan(scannerProb, 0);
+						}
+					}
+					// create Plugin scanner
+					MethodDatasetsPluginScan *scannerPlugin = new MethodDatasetsPluginScan( scannerProb, (PDF_Datasets*) pdf[0], arg );
+					if ( arg->isAction("plot") ){
+						scannerPlugin->loadScanner(m_fnamebuilder->getFileNameScanner(scannerPlugin));
+					}
+					else {
+						make1dPluginScan(scannerPlugin, 0);
+					}
+					if ( arg->plotpluginonly ){
+						make1dPluginOnlyPlot(scannerPlugin, 0);
+					}
+					else {
+						make1dPluginPlot(scannerPlugin, scannerProb, 0);
+					}
+				}
+		}
+		else if ( arg->var.size()==2 ) {
+			cout << "SORRY - 2D plugin scans not yet implemented for datasets - this will probably take a while anyway" << endl;
+			exit(1);
+		}
+	}
+	cout << "Dataset Scan Done" << endl;
+}
+
+
 
 ///
 /// run the ROOT application, if the -i flag for interactive
@@ -1370,11 +2347,10 @@ void GammaComboEngine::runApplication()
 ///
 void GammaComboEngine::printBanner()
 {
-	const char* VTAG="0.9";
+	const char* VTAG="1.3";
 	cout << endl
-		<< "\033[1mGammaCombo v" << VTAG << " -- Developed by Till Moritz Karbach\033[0m " << endl
-		<< "                   Copyright (C) 2014, moritz.karbach@gmail.com" << endl
-		<< "                   All rights reserved under GPLv3, http://www.gnu.org/licenses/gpl.txt" << endl << endl ;
+		<< "\033[1mGammaCombo v" << VTAG << " \033[0m"
+		<< "-- All rights reserved under GPLv3, http://www.gnu.org/licenses/gpl.txt" << endl << endl ;
 }
 
 ///
@@ -1383,18 +2359,21 @@ void GammaComboEngine::printBanner()
 void GammaComboEngine::run()
 {
 	if ( arg->usage ) usage(); // print usage and exit
+	defineColors();
 	checkCombinationArg();
 	checkColorArg();
 	checkAsimovArg();
-	//scaleDownErrors();
-	if ( arg->nosyst ) disableSystematics();
-	makeAddDelCombinations();
+  if ( arg->scalestaterr > -99 ) scaleStatErrors();
+  if ( arg->scaleerr > -99 ) scaleStatAndSystErrors();
+  if ( arg->nosyst ) disableSystematics();
+  makeAddDelCombinations();
   if ( arg->nbatchjobs>0 ) writebatchscripts();
-	defineColors();
 	customizeCombinerTitles();
 	setUpPlot();
-	scan();
-	if (!arg->isAction("pluginbatch")) savePlot();
+	scan(); // most thing gets done here
+  if ( arg->compare ) compareCombinations();
+  if ( arg->info || arg->latex || (arg->save!="" && !arg->saveAtMin) ) return; // if only info is requested then we can go home
+	if (!arg->isAction("pluginbatch") && !arg->isAction("coveragebatch") && !arg->isAction("coverage") ) savePlot();
 	cout << endl;
 	t.Stop();
 	t.Print();

@@ -4,52 +4,33 @@
  * Date: August 2012
  *
  */
-
+#include "TSystem.h"
 #include "MethodProbScan.h"
 
-	MethodProbScan::MethodProbScan(Combiner *comb)
+MethodProbScan::MethodProbScan(Combiner *comb)
 : MethodAbsScan(comb)
 {
 	methodName = "Prob";
 	scanDisableDragMode = false;
 	nScansDone					= 0;
 }
+
+
+MethodProbScan::MethodProbScan(OptParser* opt)
+: MethodAbsScan(opt)
+{
+	methodName = "Prob";
+	scanDisableDragMode = false;
+	nScansDone					= 0;
+}
+
 ///
 /// Default constructor
 ///
 MethodProbScan::MethodProbScan()
 {
-	exit(1);
 	methodName = "Prob";
 	scanDisableDragMode = false;
-	nScansDone					= 0;
-}
-///
-/// 'Dummy' constructor
-/// no scan needed here, hCL histogram is provided externally
-///
-MethodProbScan::MethodProbScan(PDF_Generic_Abs* PDF, OptParser* opt, TH1F* hcl, const TString &fname)
-{
-	exit(1);
-	name                = fname;
-	methodName          = "Prob";
-	scanDisableDragMode = false;
-	hCL                 = hcl;
-	combiner            = NULL;
-	w                   = PDF->getWorkspace();
-	name                = PDF->getName();
-	title               = PDF->getTitle();
-	arg                 = opt;
-	scanVar1            = arg->var[0];
-	if ( arg->var.size()>1 ) scanVar2 = arg->var[1];
-	verbose             = arg->verbose;
-	drawSolution        = 0;
-	nPoints1d           = arg->npoints1d;
-	nPoints2dx          = arg->npoints2dx;
-	nPoints2dy          = arg->npoints2dy;
-	pdfName             = PDF->getPdfName();
-	obsName             = PDF->getObsName();
-	parsName            = PDF->getParName();
 	nScansDone					= 0;
 }
 
@@ -247,6 +228,12 @@ int MethodProbScan::scan1d(bool fast, bool reverse)
 
 			double deltaChi2 = chi2minScan - chi2minGlobal;
 			double oneMinusCL = TMath::Prob(deltaChi2, 1);
+			double deltaChi2Bkg = TMath::Max(chi2minScan - hChi2min->GetBinContent(1), 0.0);
+			if(i==0) deltaChi2Bkg = 0.0;
+			double oneMinusCLBkg = TMath::Prob(deltaChi2Bkg, 1);
+			hCLs->SetBinContent(hCLs->FindBin(scanvalue), oneMinusCLBkg);
+
+			if(i==0) chi2minBkg = chi2minScan;
 
 			// Save the 1-CL value and the corresponding fit result.
 			// But only if better than before!
@@ -256,7 +243,6 @@ int MethodProbScan::scan1d(bool fast, bool reverse)
 				int iRes = hCL->FindBin(scanvalue)-1;
 				curveResults[iRes] = r;
 			}
-
 			nStep++;
 		}
 	}
@@ -279,11 +265,40 @@ int MethodProbScan::scan1d(bool fast, bool reverse)
 
 	setParameters(w, parsName, startPars->get(0));
 	saveSolutions();
-	confirmSolutions();
+	if (arg->confirmsols) confirmSolutions();
 
 	if ( (bestMinFoundInScan-bestMinOld)/bestMinOld > 0.01 ) return 1;
 	return 0;
 }
+
+///
+/// Modify the CL histograms according to the defined test statistics
+///\return status 0 ->potentially can encode debug information here
+///
+int MethodProbScan::computeCLvalues(){
+    std::cout << "Computing CL values based on test statistic decision" << std::endl;
+    std::cout << "Using "<< arg->teststatistic <<"-sided test statistic" << std::endl;
+
+	float bestfitpoint = ((RooRealVar*)getSolution()->floatParsFinal().find(scanVar1))->getVal();
+	float bestfitpointerr = ((RooRealVar*)getSolution()->floatParsFinal().find(scanVar1))->getError();
+
+	for (int k=1; k<=hCL->GetNbinsX(); k++){
+		float scanvalue=hChi2min->GetBinCenter( k );
+		float teststat_measured = hChi2min->GetBinContent( k ) - chi2minGlobal;
+		float CLb = 1. - (normal_cdf(TMath::Sqrt(teststat_measured) + ((scanvalue - 0.)/bestfitpointerr)) + normal_cdf(TMath::Sqrt(teststat_measured) - ((scanvalue - 0.)/bestfitpointerr)) - 1.);
+        if (arg->teststatistic ==1){ // use one-sided test statistic
+            teststat_measured = bestfitpoint <= scanvalue ? teststat_measured : 0.; // if mu < muhat then q_mu = 0
+            hCL->SetBinContent(k,1. - normal_cdf(TMath::Sqrt(teststat_measured)));
+            // if (scanvalue < bestfitpoint) hCL->SetBinContent(k,1.0);    // should not be here, but looks ugly if solution is drawn as p=1
+            CLb = 1. - normal_cdf(TMath::Sqrt(teststat_measured) - ((scanvalue - 0.)/bestfitpointerr));
+        }
+        if ( arg->cls.size()>0) hCLs->SetBinContent(k,min(1.,hCL->GetBinContent(k)/CLb));
+        // std::cout << "MethodProbScan::" << k << "\t" << hCL->GetBinContent(k) << "\t" << CLb << "\t" << hCLs->GetBinContent(k) <<std::endl;
+
+	}
+	return 0;
+}
+
 
 ///
 /// Delete a pointer if it is not included in
@@ -438,7 +453,7 @@ int MethodProbScan::scan2d()
 	bool firstScanDone = hChi2min2dMin<1e5;
 	TH2F *hDbgChi2min2d = histHardCopy(hChi2min2d, firstScanDone);
 	hDbgChi2min2d->SetTitle(Form("#Delta#chi^{2} for scan %i, %s",nScansDone,title.Data()));
-	if ( firstScanDone ) hDbgChi2min2d->GetZaxis()->SetRangeUser(hChi2min2dMin,hChi2min2dMin+25);
+	if ( firstScanDone ) hDbgChi2min2d->GetZaxis()->SetRangeUser(hChi2min2dMin,hChi2min2dMin+81);
 	hDbgChi2min2d->GetXaxis()->SetTitle(par1->GetTitle());
 	hDbgChi2min2d->GetYaxis()->SetTitle(par2->GetTitle());
 	hDbgChi2min2d->GetZaxis()->SetTitle("#Delta#chi^{2}");
@@ -557,13 +572,16 @@ int MethodProbScan::scan2d()
 					curveResults2d[i-1][j-1] = r;
 				}
 
-				// draw/update histograms - doing only every 10th update saves
-				// a lot of time for small combinations
-				if ( ( arg->interactive && ((int)nSteps % 10 == 0) ) || nSteps==nTotalSteps ){
+				// draw/update histograms - doing only every nth update
+        // depending on value of updateFreq
+        // saves a lot of time for small combinations
+				if ( ( arg->interactive && ((int)nSteps % arg->updateFreq == 0) ) || nSteps==nTotalSteps ){
 					hDbgChi2min2d->Draw("colz");
 					hDbgStart->Draw("boxsame");
 					startpointmark->Draw();
 					cDbg->Update();
+          cDbg->Modified();
+          gSystem->ProcessEvents();
 				}
 				tScan.Stop();
 			}
@@ -588,7 +606,7 @@ int MethodProbScan::scan2d()
 	setParameters(w, parsName, startPars->get(0));
 	saveSolutions2d();
 	if ( arg->debug ) printLocalMinima();
-	confirmSolutions();
+	if ( arg->confirmsols ) confirmSolutions();
 
 	// clean all fit results that didn't make it into the final result
 	for ( int i=0; i<allResults.size(); i++ ){
@@ -676,6 +694,7 @@ void MethodProbScan::saveSolutions2d()
 
 	// loop over chi2 histogram to locate local minima
 	for ( int i=2; i<hChi2min2d->GetNbinsX(); i++ )
+	{
 		for ( int j=2; j<hChi2min2d->GetNbinsY(); j++ )
 		{
 			if ( !(hChi2min2d->GetBinContent(i-1,   j) > hChi2min2d->GetBinContent(i, j)
@@ -697,6 +716,7 @@ void MethodProbScan::saveSolutions2d()
 			if ( arg->debug ) cout << "MethodProbScan::saveSolutions2d() : saving solution of bin " << Form("(%i,%i)",i,j) << " ..." << endl;
 			solutions.push_back((RooSlimFitResult*)curveResults2d[i-1][j-1]->Clone());
 		}
+	}
 
 	if ( solutions.size()==0 ){
 		cout << "MethodProbScan::saveSolutions2d() : WARNING : No solutions found in 2D scan!" << endl;

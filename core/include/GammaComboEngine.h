@@ -14,6 +14,8 @@
 #include "Graphviz.h"
 #include "MethodPluginScan.h"
 #include "MethodProbScan.h"
+#include "MethodBergerBoosScan.h"
+#include "MethodCoverageScan.h"
 #include "OneMinusClPlot.h"
 #include "OneMinusClPlot2d.h"
 #include "OneMinusClPlotAbs.h"
@@ -26,6 +28,7 @@
 #include "TDatime.h"
 #include "Utils.h"
 #include "BatchScriptWriter.h"
+#include "LatexMaker.h"
 
 using namespace std;
 using namespace Utils;
@@ -40,14 +43,26 @@ class GammaComboEngine
 	public:
 
 		GammaComboEngine(TString name, int argc, char* argv[]);
+		GammaComboEngine(TString name, int argc, char* argv[], bool _runOnDataSet);
 		~GammaComboEngine();
 
 		void            adjustRanges(Combiner *c, int cId);
-		void			addPdf(int id, PDF_Abs* pdf, TString title="");
-		void			addCombiner(int id, Combiner* cmb);
-		void			cloneCombiner(int newId, int oldId, TString name, TString title);
-		Combiner* 		getCombiner(int id) const;
-		PDF_Abs*		getPdf(int id);
+    void            setupToyVariationSets(Combiner *c, int cId);
+		void			      addPdf(int id, PDF_Abs* pdf, TString title="");
+    void            addSubsetPdf(int id, PDF_Abs* pdf, vector<int>& indices, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, int i3, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, int i6, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, int i6, int i7, TString title="" );
+    void            addSubsetPdf(int id, PDF_Abs* pdf, int i1, int i2, int i3, int i4, int i5, int i6, int i7, int i8, TString title="" );
+    void            setPdf( PDF_Abs* pdf);
+		void			      addCombiner(int id, Combiner* cmb);
+		void			      cloneCombiner(int newId, int oldId, TString name, TString title);
+		Combiner* 		  getCombiner(int id) const;
+		PDF_Abs*		    getPdf(int id);
 		inline OptParser* 	getArg(){return arg;};
 		void			newCombiner(int id, TString name, TString title,
 					int pdf1=-1, int pdf2=-1, int pdf3=-1, int pdf4=-1, int pdf5=-1,
@@ -60,6 +75,7 @@ class GammaComboEngine
 		void			runApplication();
 		void            scanStrategy1d(MethodProbScan *scanner, ParameterCache *pCache);
 		void			scanStrategy2d(MethodProbScan *scanner, ParameterCache *pCache);
+    inline void      setRunOnDataSet(bool opt) { runOnDataSet = opt; };
 		PDF_Abs* 		operator[](int idx);
 
 	private:
@@ -68,8 +84,9 @@ class GammaComboEngine
 		void			checkAsimovArg();
 		void			checkColorArg();
 		void			checkCombinationArg();
-		void            configureAsimovCombinerNames(Combiner* c, int i);
+		void      configureAsimovCombinerNames(Combiner* c, int i);
 		bool			combinerExists(int id) const;
+    void      compareCombinations();
 		void			customizeCombinerTitles();
 		void			defineColors();
 		void			disableSystematics();
@@ -82,6 +99,9 @@ class GammaComboEngine
 		void			make1dPluginScan(MethodPluginScan *scannerPlugin, int cId);
 		void			make1dProbPlot(MethodProbScan *scanner, int cId);
 		void			make1dProbScan(MethodProbScan *scanner, int cId);
+    void      make1dCoverageScan(MethodCoverageScan *scanner, int cId);
+    void      make1dCoveragePlot(MethodCoverageScan *scanner, int cId);
+    void      make1dBergerBoosScan(MethodBergerBoosScan *scanner, int cId);
 		void			make2dPluginOnlyPlot(MethodPluginScan *sPlugin, int cId);
 		void			make2dPluginPlot(MethodPluginScan *sPlugin, MethodProbScan *sProb, int cId);
 		void			make2dPluginScan(MethodPluginScan *scannerPlugin, int cId);
@@ -91,19 +111,33 @@ class GammaComboEngine
 		void			printBanner();
 		bool			pdfExists(int id);
 		void			savePlot();
-		void			scaleDownErrors();
+    void      scaleStatErrors();
+    void      scaleStatAndSystErrors();
+		void			scaleDownErrors(); // now defunct
 		void			scan();
+		void			scanDataSet();
 		void			setAsimovObservables(Combiner* c);
+    void      setObservablesFromFile(Combiner *c, int cId);
 		void			loadAsimovPoint(Combiner* c, int cId);
 		void			setUpPlot();
 		void      tightenChi2Constraint(Combiner *c, TString scanVar);
 		void			usage();
     void      writebatchscripts();
+    void      makeLatex( Combiner *c );
+    void      saveWorkspace( Combiner *c, int i );
+    void      runToys( Combiner *c );
 
 		OptParser*			arg;
 		vector<Combiner*> 	cmb;
 		vector<int> 		colorsLine;
 		vector<int> 		colorsText;
+    vector<int>     fillStyles;
+    vector<int>     fillColors;
+    vector<float>   fillTransparencies;
+    vector<int>     lineColors;
+    vector<int>     lineStyles;
+    vector<int>     lineWidths;
+    vector<MethodProbScan*> comparisonScanners;
 		TString 			execname;
 		FileNameBuilder*	m_fnamebuilder;
     BatchScriptWriter* m_batchscriptwriter;
@@ -111,6 +145,7 @@ class GammaComboEngine
 		OneMinusClPlotAbs*	plot;
 		TStopwatch 			t;
 		TApplication* 		theApp;
+    bool        runOnDataSet;
 };
 
 #endif
