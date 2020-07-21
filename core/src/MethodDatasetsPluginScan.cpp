@@ -459,9 +459,10 @@ void MethodDatasetsPluginScan::readScan1dTrees(int runMin, int runMax, TString f
     std::map<int,std::vector<double> > sampledBiasValues;
 
     // map of vectors for CLb quantiles
-    std::map<int,std::vector<double> > sampledSchi2Values;
-    std::map<int,std::vector<double> > sampledBValues;
-    std::map<int,std::vector<double> > sampledSBValues;
+    std::map<int,std::vector<double> > sampledSchi2Values;  // 2*(NLL_scan-NLL_free) distribution per scan point
+    std::map<int,std::vector<double> > sampledBValues;      // 2*(NLL_scan-NLL_free) distribution for bkg-only toys per scan point
+    std::vector<double> sampledBchi2Values;                 // 2*(NLL_bkg-NLL_free) distribution for bkg-only toys
+    std::map<int,std::vector<double> > sampledSBValues;     // duplicate of sampledBValues: ToDo: remove!
     TH1F *h_pVals         = new TH1F("p", "p", 200, 0.0, 1e-2);
     Long64_t nentries     = t.GetEntries();
     cout << "MethodDatasetsPluginScan::readScan1dTrees() : average number of toys per scanpoint: " << (double) nentries / (double)nPoints1d << endl;
@@ -552,10 +553,12 @@ void MethodDatasetsPluginScan::readScan1dTrees(int runMin, int runMax, TString f
         // chi2minBkgToy is the best fit at scanpoint of bkg-only toy
         double teststat_measured = t.chi2min - this->chi2minGlobal;
         double sb_teststat_toy= t.chi2minToy - t.chi2minGlobalToy;
+        double sb_teststat_bkg_toy= t.chi2minBkgBkgToy - t.chi2minGlobalToy;
         double b_teststat_toy = t.chi2minBkgToy - t.chi2minGlobalBkgToy;
         if (arg->teststatistic ==1){ // use one-sided test statistic
             teststat_measured = bestfitpoint <= t.scanpoint ? teststat_measured : 0.; // if mu < muhat then q_mu = 0 //best fit point defined in constructor
             sb_teststat_toy = t.scanbest <= t.scanpoint ? sb_teststat_toy : 0.; // if mu < muhat then q_mu = 0
+            sb_teststat_bkg_toy = t.scanbestBkg <= 0 ? sb_teststat_bkg_toy : 0.; // if mu < muhat then q_mu = 0
             b_teststat_toy = t.scanbestBkg <= t.scanpoint ? b_teststat_toy : 0.;  // if mu < muhat then q_mu = 0
         }
         // the usage of the two-sided test statistic is default
@@ -619,6 +622,7 @@ void MethodDatasetsPluginScan::readScan1dTrees(int runMin, int runMax, TString f
                 // std::cout << bkgTestStatVal << std::endl;
                 bkg_pvals->Fill(TMath::Prob(b_teststat_toy,1));
                 h_sig_bkgtoys->Fill(t.scanbestBkg);
+                sampledBchi2Values.push_back(sb_teststat_bkg_toy);
             }
             sampledBValues[hBin].push_back( b_teststat_toy );
             sampledSBValues[hBin].push_back( b_teststat_toy );
@@ -1076,6 +1080,7 @@ void MethodDatasetsPluginScan::readScan1dTrees(int runMin, int runMax, TString f
     float fitprobabilityErr = sqrt(fitprobabilityVal * (1. - fitprobabilityVal) / nall);
     cout << "MethodDatasetsPluginScan::readScan1dTrees() : fit prob of best-fit point: "
          << Form("(%.1f+/-%.1f)%%", fitprobabilityVal * 100., fitprobabilityErr * 100.) << endl;
+    printSignificance(sampledBchi2Values);
 }
 
 

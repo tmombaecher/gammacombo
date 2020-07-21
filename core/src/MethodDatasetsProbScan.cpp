@@ -497,6 +497,7 @@ int MethodDatasetsProbScan::scan1d(bool fast, bool reverse)
     // \todo: use this->sethCLFromProbScanTree() directly after figuring out the cause of the segfault.
     this->loadScanFromFile();
 
+    printSignificance();
     return 0;
 }
 

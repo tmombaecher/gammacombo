@@ -1720,3 +1720,32 @@ bool MethodAbsScan::checkCLs()
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 //// end of CL_s part
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+/*!
+\brief Gets the signal significance either by exploiting Wilks' theorem or from toys
+\param bkg_toys_deltachi2 vector of DeltacChi2 values for the bkg-only hypothesis.
+*/
+void MethodAbsScan::printSignificance(std::vector<double> bkg_toys_deltachi2){
+	double DeltaChi2_obs = chi2minBkg-chi2minGlobal;
+	if(DeltaChi2_obs<0){
+		std::cout << "MethodAbsScan::printSignificance(): Negative Delta chi2 of " << DeltaChi2_obs << "! this should only happen in rare occasions and be close to zero. Setting to zero." << std::endl;
+		DeltaChi2_obs = 0.;
+	}
+	std::cout << "Signal significance p-value of ";
+	if(bkg_toys_deltachi2.size()!=0){
+		// determine significance from toys
+		double pval = (1. - getVectorFracAboveValue(bkg_toys_deltachi2, DeltaChi2_obs));
+		if(arg->teststatistic == 1) pval = (1. - 2*getVectorFracAboveValue(bkg_toys_deltachi2, DeltaChi2_obs));
+		double unc = sqrt(pval*(1.-pval)/bkg_toys_deltachi2.size());
+		double Z_score = sqrt(TMath::ChisquareQuantile(pval,1));
+		std::cout << "(" << pval*100	<< " +/- " << unc*100 << ") %, corresponding to a Z score of " << Z_score << std::endl;
+		return;
+	}
+	double Z_score = sqrt(DeltaChi2_obs);
+	double pval = 1. - TMath::Prob(DeltaChi2_obs,1);
+	std::cout << pval*100	<< " %, corresponding to a Z score of " << Z_score << std::endl;
+	return;
+}
+
+
