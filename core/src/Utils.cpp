@@ -850,7 +850,7 @@ int Utils::calcNsubdigits(double value, int sigdigits)
 	int count = 0;
 	for (; fabs(value)<pow(10.,sigdigits-1); value *= 10)
 	{
-		if ( count==10 ) break;
+		if ( count==14 ) break; 	//limits precision to 1e-14
 		count++;
 	}
 
@@ -862,7 +862,7 @@ int Utils::calcNsubdigits(double value, int sigdigits)
 	count = 0;
 	for (; fabs(value)<pow(10.,sigdigits-1); value *= 10)
 	{
-		if ( count==10 ) break;
+		if ( count==14 ) break;		//limits precision to 1e-14
 		count++;
 	}
 	return count;
