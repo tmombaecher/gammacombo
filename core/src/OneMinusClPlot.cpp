@@ -409,6 +409,14 @@ void OneMinusClPlot::scan1dCLsPlot(MethodAbsScan *s, bool smooth, bool obsError)
   TGraph *gErr2Up;
   TGraph *gErr2Dn;
 
+	// fix point 0 to CLs=1 for all expected curves
+	gExpRaw->SetPoint(0,0.,1.);
+	gErr1UpRaw->SetPoint(0,0.,1.);
+	gErr1DnRaw->SetPoint(0,0.,1.);
+	gErr2UpRaw->SetPoint(0,0.,1.);
+	gErr2DnRaw->SetPoint(0,0.,1.);
+
+
   TGraphSmooth *smoother = new TGraphSmooth();
   if (smooth) {
     if ( arg->debug ) cout << "OneMinusClPlot::scan1dCLsPlot() : smoothing graphs" << endl;
@@ -417,18 +425,18 @@ void OneMinusClPlot::scan1dCLsPlot(MethodAbsScan *s, bool smooth, bool obsError)
     // gErr1Dn = (TGraph*)smoother->SmoothSuper( gErr1DnRaw )->Clone("gErr1Dn");
     // gErr2Up = (TGraph*)smoother->SmoothSuper( gErr2UpRaw )->Clone("gErr2Up");
     // gErr2Dn = (TGraph*)smoother->SmoothSuper( gErr2DnRaw )->Clone("gErr2Dn");
-    gExp    = (TGraph*)smoother->SmoothSuper( gExpRaw   )->Clone("gExp");
+    // gExp    = (TGraph*)smoother->SmoothSuper( gExpRaw   )->Clone("gExp");
     // gErr1Up = (TGraph*)smoother->SmoothSuper( gErr1UpRaw )->Clone("gErr1Up");
-    gErr1Dn = (TGraph*)smoother->SmoothSuper( gErr1DnRaw )->Clone("gErr1Dn");
+    // gErr1Dn = (TGraph*)smoother->SmoothSuper( gErr1DnRaw )->Clone("gErr1Dn");
     // gErr2Up = (TGraph*)smoother->SmoothSuper( gErr2UpRaw )->Clone("gErr2Up");
-    gErr2Dn = (TGraph*)smoother->SmoothSuper( gErr2DnRaw )->Clone("gErr2Dn");
+    // gErr2Dn = (TGraph*)smoother->SmoothSuper( gErr2DnRaw )->Clone("gErr2Dn");
 
     //alternative smoothing option, needs more fiddling
-    // gExp    = (TGraph*)smoother->SmoothKern( gExpRaw   ,"normal",hExp->GetBinWidth(1)*4)->Clone("gExp");
+    gExp    = (TGraph*)smoother->SmoothKern( gExpRaw   ,"normal",hExp->GetBinWidth(1)*3, hExp->GetNbinsX())->Clone("gExp");
     gErr1Up = (TGraph*)smoother->SmoothKern( gErr1UpRaw,"normal",hErr1Up->GetBinWidth(1)*2, hErr1Up->GetNbinsX())->Clone("gErr1Up");
-    // gErr1Dn = (TGraph*)smoother->SmoothKern( gErr1DnRaw,"normal",hErr1Dn->GetBinWidth(1)*4)->Clone("gErr1Dn");
-    gErr2Up = (TGraph*)smoother->SmoothKern( gErr2UpRaw,"normal",hErr2Up->GetBinWidth(1)*2, hErr1Up->GetNbinsX())->Clone("gErr2Up");
-    // gErr2Dn = (TGraph*)smoother->SmoothKern( gErr2DnRaw,"normal",hErr2Dn->GetBinWidth(1)*4)->Clone("gErr2Dn");
+    gErr1Dn = (TGraph*)smoother->SmoothKern( gErr1DnRaw,"normal",hErr1Dn->GetBinWidth(1)*4, hErr1Dn->GetNbinsX())->Clone("gErr1Dn");
+    gErr2Up = (TGraph*)smoother->SmoothKern( gErr2UpRaw,"normal",hErr2Up->GetBinWidth(1)*2, hErr2Up->GetNbinsX())->Clone("gErr2Up");
+    gErr2Dn = (TGraph*)smoother->SmoothKern( gErr2DnRaw,"normal",hErr2Dn->GetBinWidth(1)*4, hErr2Dn->GetNbinsX())->Clone("gErr2Dn");
 
     // //make sure the CLs=1 points do NOT get smoothed away
 
@@ -454,7 +462,6 @@ void OneMinusClPlot::scan1dCLsPlot(MethodAbsScan *s, bool smooth, bool obsError)
 	}
 
     // fix point 0 to CLs=1 for all expected curves
-
     gExp->SetPoint(0,0.,1.);
     gErr1Up->SetPoint(0,0.,1.);
     gErr1Dn->SetPoint(0,0.,1.);
