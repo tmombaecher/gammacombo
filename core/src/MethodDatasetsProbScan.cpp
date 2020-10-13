@@ -38,10 +38,6 @@ MethodDatasetsProbScan::MethodDatasetsProbScan(PDF_Datasets* PDF, OptParser* opt
 
     inputFiles.clear();
 
-    if (w->obj("data_fit_result") == NULL) { //\todo: support passing the name of the fit result in the workspace.
-        cerr << "ERROR: The workspace must contain the fit result of the fit to data. The name of the fit result must be 'data_fit_result'. " << endl;
-        exit(EXIT_FAILURE);
-    }
     if ( !w->set(pdf->getObsName()) ) {
         cerr << "MethodDatasetsProbScan::MethodDatasetsProbScan() : ERROR : no '" + pdf->getObsName() + "' set found in workspace" << endl;
         cerr << " You can specify the name of the set in the workspace using the pdf->initObservables(..) method.";
@@ -84,7 +80,7 @@ void MethodDatasetsProbScan::initScan() {
     if(scanVar1==scanVar2){
         if(arg->debug) std::cout << "DEBUG: MethodDatasetsProbScan::initScan() : scanning y range" << std::endl;
         min1 = arg->scanrangeyMin;
-        max1 = arg->scanrangeyMax;        
+        max1 = arg->scanrangeyMax;
     }
 
     hCL = new TH1F("hCL" + getUniqueRootName(), "hCL" + pdf->getPdfName(), nPoints1d, min1, max1);
@@ -164,15 +160,15 @@ void MethodDatasetsProbScan::initScan() {
     globalMin->SetName("globalMin");
     // chi2minGlobal = 2 * globalMin->minNll();
     chi2minGlobal = 2 * pdf->getMinNll();
-    std::cout << "=============== Global minimum (2*-Log(Likelihood)) is: 2*" << globalMin->minNll() << " = " << chi2minGlobal << endl;
+    std::cout << "=============== Global minimum (2*-Log(Likelihood)) is: " << chi2minGlobal << endl;
     // background only
-    // if ( !pdf->getBkgPdf() ) 
+    // if ( !pdf->getBkgPdf() )
       bkgOnlyFitResult = pdf->fitBkg(pdf->getData(), arg->var[0]); // fit on data w/ bkg only hypoth
       assert(bkgOnlyFitResult);
       bkgOnlyFitResult->SetName("bkgOnlyFitResult");
       // chi2minBkg = 2 * bkgOnlyFitResult->minNll();
       chi2minBkg = 2 * pdf->getMinNllBkg();
-      std::cout << "=============== Bkg minimum (2*-Log(Likelihood)) is: 2*" << bkgOnlyFitResult->minNll() << " = " << chi2minBkg << endl;
+      std::cout << "=============== Bkg minimum (2*-Log(Likelihood)) is: " << chi2minBkg << endl;
       w->var(scanVar1)->setConstant(false);
       if (chi2minBkg<chi2minGlobal)
       {
@@ -386,6 +382,7 @@ int MethodDatasetsProbScan::scan1d(bool fast, bool reverse)
     RooSlimFitResult *slimresult = new RooSlimFitResult(result,true);
 		slimresult->setConfirmed(true);
 		solutions.push_back(slimresult);
+        Utils::setParameters(w,result); // Set parameters to result (necessary to get correct freeDataFitValue if using a multipdf)
 		double freeDataFitValue = w->var(scanVar1)->getVal();
 
     // Define outputfile
@@ -457,14 +454,29 @@ int MethodDatasetsProbScan::scan1d(bool fast, bool reverse)
         // After doing the fit with the parameter of interest constrained to the scanpoint,
         // we are now saving the fit values of the nuisance parameters. These values will be
         // used to generate toys according to the PLUGIN method.
+        // After doing the fit with the parameter of interest constrained to the scanpoint,
+        // we are now saving the fit values of the nuisance parameters. These values will be
+        // used to generate toys according to the PLUGIN method.
+        //
+        // Firstly save the parameter values from the workspace using storeParsScan(). If using
+        // a multipdf, this means that all parameters are close to their scan fit values, which
+        // should help with convergence.
+        // Then save parameter values from the best fit result using storeParsScan(result). If
+        // using a multipdf, this means the values of the parameters which appear in the best
+        // pdf are set to the values from the fit using that pdf, so S+B toys are generated with
+        // the correct nuisance parameter values. If not using a multipdf, this command is identical
+        // to storeParsScan()        
         this->probScanTree->storeParsScan(); // \todo : figure out which one of these is semantically the right one
+        this->probScanTree->storeParsScan(); 
+        this->probScanTree->storeParsScan(result); 
+        this->probScanTree->bestIndexScanData = pdf->getBestIndex();
 
         this->pdf->deleteNLL();
 
         // also save the chi2 of the free data fit to the tree:
         this->probScanTree->chi2minGlobal = this->getChi2minGlobal();
         probScanTree->covQualFree = globalMin->covQual();
-        probScanTree->statusFree = globalMin->status();        
+        probScanTree->statusFree = globalMin->status();
         this->probScanTree->chi2minBkg = this->getChi2minBkg();
         if(bkgOnlyFitResult){
             probScanTree->statusFreeBkg = bkgOnlyFitResult->status();
@@ -615,13 +627,13 @@ int MethodDatasetsProbScan::scan2d()
     cDbg->SetMargin(0.1,0.15,0.1,0.1);
     float hChi2min2dMin = hChi2min2d->GetMinimum();
     bool firstScanDone = hChi2min2dMin<1e5;
-    TH2F *hDbgChi2min2d = histHardCopy(hChi2min2d, firstScanDone);
+    TH2F *hDbgChi2min2d = histHardCopy(hChi2min2d, firstScanDone, true);
     hDbgChi2min2d->SetTitle(Form("#Delta#chi^{2} for scan %i, %s",nScansDone,title.Data()));
     if ( firstScanDone ) hDbgChi2min2d->GetZaxis()->SetRangeUser(hChi2min2dMin,hChi2min2dMin+25);
     hDbgChi2min2d->GetXaxis()->SetTitle(par1->GetTitle());
     hDbgChi2min2d->GetYaxis()->SetTitle(par2->GetTitle());
     hDbgChi2min2d->GetZaxis()->SetTitle("#Delta#chi^{2}");
-    TH2F *hDbgStart = histHardCopy(hChi2min2d, false);
+    TH2F *hDbgStart = histHardCopy(hChi2min2d, false, true);
 
 
     // start coordinates //Titus: start at the global minimum
@@ -801,6 +813,11 @@ int MethodDatasetsProbScan::scan2d()
         cout << "MethodDatasetsProbScan::scan2d() :          min chi2 found in scan: " << bestMinFoundInScan << ", old min chi2: " << bestMinOld << endl;
         return 1;
     }
+
+  // cleanup
+  if (hDbgChi2min2d) delete hDbgChi2min2d;
+  if (hDbgStart) delete hDbgStart;
+
     return 0;
 }
 
